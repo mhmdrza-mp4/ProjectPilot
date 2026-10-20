@@ -15,6 +15,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/project_decision"]
 
+[project.optional-dependencies]
+msp = ["pywin32; sys_platform == 'win32'"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not msp'"
+markers = [
+    "msp: integration tests that require a real Microsoft Project via COM (run with: pytest -m msp)",
+]

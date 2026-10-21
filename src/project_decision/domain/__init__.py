@@ -11,9 +11,11 @@ External systems adapt to the domain, never the other way around.
 
 from project_decision.domain.constraint import Constraint, ConstraintKind
 from project_decision.domain.decision import Decision, DecisionKind
+from project_decision.domain.decision_assumption import DecisionAssumption
 from project_decision.domain.decision_evaluation import DecisionEvaluation
 from project_decision.domain.decision_problem import DecisionProblem
 from project_decision.domain.decision_recommendation import DecisionRecommendation
+from project_decision.domain.evaluation_criterion import EvaluationCriterion
 from project_decision.domain.milestone import Milestone
 from project_decision.domain.planning_period import PlanningPeriod
 from project_decision.domain.planning_session import PlanningSession
@@ -28,10 +30,12 @@ __all__ = [
     "Constraint",
     "ConstraintKind",
     "Decision",
+    "DecisionAssumption",
     "DecisionEvaluation",
     "DecisionKind",
     "DecisionProblem",
     "DecisionRecommendation",
+    "EvaluationCriterion",
     "Milestone",
     "PlanningPeriod",
     "PlanningSession",

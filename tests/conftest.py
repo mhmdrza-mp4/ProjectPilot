@@ -45,6 +45,7 @@ def make_constraint(constraint_id: str = "C1", **overrides) -> Constraint:
 def make_decision(decision_id: str = "D1", **overrides) -> Decision:
     defaults = dict(
         id=decision_id,
+        name=f"Alternative {decision_id}",
         kind=DecisionKind.ADD_RESOURCE_CAPACITY,
         description="add a second engineer to T1",
     )

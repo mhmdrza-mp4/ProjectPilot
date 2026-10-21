@@ -10,10 +10,15 @@ class TestDecision:
 
         decision = make_decision()
         assert decision.kind == DecisionKind.ADD_RESOURCE_CAPACITY
+        assert decision.name == "Alternative D1"
 
     def test_empty_id_rejected(self):
         with pytest.raises(ValueError, match="id"):
             make_decision(decision_id="")
+
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValueError, match="name"):
+            make_decision(decision_id="D", name="")
 
     def test_empty_description_rejected(self):
         with pytest.raises(ValueError, match="description"):

@@ -1,9 +1,10 @@
 """Decision concept: one candidate action the planner could take.
 
-A decision is described, not executed. The current vocabulary of
-kinds covers the plain schedule-control moves a planner can make;
-the actual effect computation will belong to the evaluation logic
-(application layer + later JEV).
+A decision is described, not executed. The ``name`` is a short label for
+lists and pickers; the ``description`` carries the planner's fuller
+wording. The current vocabulary of kinds covers the plain
+schedule-control moves a planner can make; the actual effect computation
+will belong to the evaluation logic (application layer + later JEV).
 """
 
 from __future__ import annotations
@@ -24,14 +25,17 @@ class DecisionKind(Enum):
 
 @dataclass
 class Decision:
-    """A possible project-control action."""
+    """A possible project-control action (a decision alternative)."""
 
     id: str
+    name: str
     kind: DecisionKind
     description: str
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("Decision.id must not be empty")
+        if not self.name:
+            raise ValueError("Decision.name must not be empty")
         if not self.description:
             raise ValueError("Decision.description must not be empty")

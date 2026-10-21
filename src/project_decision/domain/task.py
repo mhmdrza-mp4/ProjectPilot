@@ -8,6 +8,20 @@ Assumptions (documented, deliberately simple):
 - Dependencies and assigned resources are referenced by id; a Task does
   not own Task or Resource objects. Referential integrity is checked at
   the Project level, where both sides are known.
+- ``total_slack_days`` is Microsoft Project's TotalSlack expressed in
+  the same working-day unit as ``duration_days`` (COM reports minutes).
+  It MAY be negative for tasks that are already late; ``None`` means
+  the source did not report it.
+- ``is_critical`` mirrors MSP's Critical flag (True = on the critical
+  path); ``None`` means not reported — no criticality is ever derived
+  here from other fields.
+- ``notes`` is the MSP task Notes text, or ``None`` when the source has
+  none. Empty/whitespace-only notes are treated as "none" by the mapper.
+- ``is_summary`` mirrors MSP's Summary flag (a row that only groups its
+  subtasks and carries no work itself). The MSP adapter currently skips
+  summary rows entirely; the flag exists so snapshots and any future
+  mappable summary rows stay distinguishable from normal tasks. It is
+  NEVER inferred from names, indentation, duration, or dependencies.
 """
 
 from __future__ import annotations
@@ -18,7 +32,7 @@ from datetime import date
 
 @dataclass
 class Task:
-    """A unit of work in the project."""
+    """A unit of work in a project."""
 
     id: str
     name: str
@@ -28,6 +42,10 @@ class Task:
     finish: date | None = None
     dependency_ids: list[str] = field(default_factory=list)
     assigned_resource_ids: list[str] = field(default_factory=list)
+    total_slack_days: float | None = None
+    is_critical: bool | None = None
+    notes: str | None = None
+    is_summary: bool = False
 
     def __post_init__(self) -> None:
         if not self.id:

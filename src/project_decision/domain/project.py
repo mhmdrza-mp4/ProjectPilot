@@ -8,7 +8,7 @@ resource ids that must exist).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 from project_decision.domain.constraint import Constraint
 from project_decision.domain.milestone import Milestone
@@ -27,7 +27,12 @@ def _require_unique_ids(items: list[Task] | list[Resource] | list[Milestone] | l
 
 @dataclass
 class Project:
-    """The planned and current content of a project."""
+    """The planned and current content of a project.
+
+    The schedule/baseline fields are optional and mean exactly what the
+    source reported: ``None`` = not available (e.g. no baseline saved).
+    They are never guessed or defaulted to today's date.
+    """
 
     id: str
     name: str
@@ -35,6 +40,11 @@ class Project:
     resources: list[Resource] = field(default_factory=list)
     milestones: list[Milestone] = field(default_factory=list)
     constraints: list[Constraint] = field(default_factory=list)
+    project_start: date | None = None
+    project_finish: date | None = None
+    status_date: date | None = None
+    baseline_start: date | None = None
+    baseline_finish: date | None = None
 
     def __post_init__(self) -> None:
         if not self.id:

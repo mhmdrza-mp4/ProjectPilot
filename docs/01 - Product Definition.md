@@ -1,5 +1,11 @@
 # 01 - Product Definition
 
+> **Historical design record (early stage).** The current state of the
+> product is described in the [README](../README.md),
+> [docs/architecture.md](architecture.md), and
+> [docs/decision-model.md](decision-model.md). This page is kept as the
+> original problem framing and design intent.
+
 ## User
 
 The primary user is a **Project Planner / Project Controller** who plans and

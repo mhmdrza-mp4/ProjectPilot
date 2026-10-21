@@ -15,10 +15,14 @@ from project_decision.domain.decision_evaluation import DecisionEvaluation
 from project_decision.domain.decision_problem import DecisionProblem
 from project_decision.domain.decision_recommendation import DecisionRecommendation
 from project_decision.domain.milestone import Milestone
+from project_decision.domain.planning_period import PlanningPeriod
+from project_decision.domain.planning_session import PlanningSession
 from project_decision.domain.project import Project
 from project_decision.domain.project_state import ProjectState
 from project_decision.domain.resource import Resource
 from project_decision.domain.task import Task
+from project_decision.domain.task_status import TaskStatus, classify_task, task_status_label
+from project_decision.domain.working_days import calculate_working_days
 
 __all__ = [
     "Constraint",
@@ -29,8 +33,14 @@ __all__ = [
     "DecisionProblem",
     "DecisionRecommendation",
     "Milestone",
+    "PlanningPeriod",
+    "PlanningSession",
     "Project",
     "ProjectState",
     "Resource",
     "Task",
+    "TaskStatus",
+    "calculate_working_days",
+    "classify_task",
+    "task_status_label",
 ]

@@ -552,6 +552,28 @@ class TestStreamlitAppSmoke:
             header.value for header in at.subheader
         ]
 
+    def test_sample_project_expander_is_discoverable_in_ui(self):
+        at = self._run()
+        assert not at.exception
+        expanders = [expander.label for expander in at.expander]
+        assert "Sample MSP Project" in expanders
+        # The guide text lives inside the expander's content; AppTest
+        # exposes the rendered markdown for us to assert honesty.
+        all_text = [
+            markdown.value for markdown in at.markdown
+        ]
+        sample_text = components.sample_project_guide_text()
+        first_line = sample_text.split("\n", 1)[0]
+        assert any(first_line in value for value in all_text)
+
+    def test_demo_mode_keyboard_flow_unchanged(self):
+        at = self._run()
+        self._click(at, "Load Demo Project")
+        assert not at.exception
+        subheaders = [header.value for header in at.subheader]
+        assert "Project" in subheaders
+        assert "Planning Period" in subheaders
+
     def test_load_failure_shows_error_and_keeps_setup(self, monkeypatch):
         from project_decision.application import project_loader
         from project_decision.infrastructure.msp.exceptions import (

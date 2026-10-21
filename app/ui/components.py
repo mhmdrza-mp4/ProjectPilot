@@ -670,6 +670,53 @@ def build_jev_evaluator(env_file_directory=None):
 # -- small aggregates the dashboard reads from the existing review ---------------
 
 
+# -- sample MSP project (discoverable in the UI) ---------------------------------
+
+
+def sample_project_path() -> str:
+    """Absolute path of the bundled sample `.mpp` (text only; no COM).
+
+    Helper for the UI's "Sample MSP Project" expander: shows WHERE the
+    file is so the user can double-click it in Microsoft Project. The
+    application itself never opens or writes the file.
+    """
+    from pathlib import Path
+
+    return str(
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "production-line-commissioning"
+        / "Production_Line_Commissioning.mpp"
+    )
+
+
+def sample_project_guide_text() -> str:
+    """What the UI tells the user about the bundled sample MSP project."""
+    path = sample_project_path()
+    return (
+        "**Sample MSP Project** — a real Microsoft Project file "
+        "(~120 tasks, 12 phases, 10 resources, industrial commissioning "
+        "scenario) bundled with the repository in\n"
+        f"`{path}`.\n\n"
+        "**How to use it**\n"
+        "1. Open that `.mpp` file in Microsoft Project on this machine.\n"
+        "2. Keep it the ACTIVE project window there.\n"
+        "3. Come back here and press **Load Active MSP Project** — the "
+        "integration reads it strictly read-only.\n"
+        "4. Pick a planning period (a recommended first window is "
+        "`2026-10-22 → 2026-11-06`), confirm, and run the analysis.\n\n"
+        "**What it is and is not**\n"
+        "- It is NOT the Demo Mode (which runs entirely offline).\n"
+        "- THIS sample uses the live Microsoft Project integration, so it "
+        "needs Microsoft Project installed and a project open.\n"
+        "- Consequence of Delay (JEV) stays offline (provisional) unless "
+        "a `TYPESAFE_API_KEY` is configured; nothing pretend is loaded.\n"
+        "- No file is opened, saved, or closed by this application.\n\n"
+        "Full guide and verified expected results live next to the file in "
+        "`examples/production-line-commissioning/`."
+    )
+
+
 def review_reason_chips(review: DecisionReview) -> list[str]:
     """Machine counts from the existing review, as display chips."""
     return [

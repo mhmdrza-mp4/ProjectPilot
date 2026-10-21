@@ -34,6 +34,49 @@ Real screenshots of the demo flow (captured from the running app with
 | Decision dashboard (rank + review + chart) | ![Decision dashboard](docs/assets/demo_3_decision_dashboard.png) |
 | Task detail (contributions, consequence provenance, conflicts) | ![Task detail](docs/assets/demo_4_task_detail.png) |
 
+## Try the Application With a Real Microsoft Project File
+
+A substantial, realistic sample project ships in the repository:
+
+```
+examples/production-line-commissioning/Production_Line_Commissioning.mpp
+```
+
+- **What it is:** a ~120-task, 12-phase industrial commissioning
+  project (Production Line Commissioning — Sample Project, 10
+  resources, completed/in-progress/future activity mix, real resource
+  over-allocation to drive conflict detection).
+- **What it is NOT:** it is *not* the built-in Demo Mode. Demo Mode is
+  an offline, hard-coded fixture; this sample is a genuine Microsoft
+  Project file that must be *opened in Microsoft Project* and is then
+  read through the app's existing strict read-only MSP integration.
+- **Quick workflow** (Windows + Microsoft Project installed):
+
+  1. Open
+     `examples/production-line-commissioning/Production_Line_Commissioning.mpp`
+     in Microsoft Project and leave it as the active project window.
+  2. Run the app (`streamlit run app/streamlit_app.py`) and click
+     **Load Active MSP Project** — the integration reads it
+     strictly read-only.
+  3. Pick a planning period (a recommended first window is
+     `2026-10-22 → 2026-11-06`), confirm the session, and run the
+     analysis.
+
+  The same **Sample MSP Project** hint is surfaced in the app's
+  Project section (an expander under the Demo / Live buttons) so users
+  can discover it without leaving the UI. **No file is opened, saved,
+  or closed by this application.**
+- **JEV status on this sample:** Consequence of Delay stays offline
+  (provisional, flagged for review) unless a `TYPESAFE_API_KEY` is
+  configured. There is no fabricated live JEV path — see
+  `examples/production-line-commissioning/scenario-data.json` for the
+  real JEV input contract and *manual* assessment basis.
+- **Detailed guide and verified outcomes:** see
+  [the sample's own README](examples/production-line-commissioning/README.md)
+  and [expected-results.md](examples/production-line-commissioning/expected-results.md)
+  (the numbers there come from the real pipeline and the existing
+  `pytest -m msp` suite, all passing against this sample).
+
 ## Problem
 
 Managers periodically face a set of **incomplete project activities**
@@ -268,7 +311,13 @@ src/project_decision/
 tests/                              hermetic suite + fakes + live markers
 scripts/                            msp_field_dump.py (read-only report),
     manual_msp_read.py,
-    msp_fixture_author.py (WRITE-CAPABLE; requires --i-understand)
+    msp_fixture_author.py (WRITE-CAPABLE; requires --i-understand),
+    generate_sample_msp.py (WRITE-CAPABLE; requires --i-understand,
+    only touches its own fresh sample project)
+examples/production-line-commissioning/
+    Production_Line_Commissioning.mpp (bundled sample project),
+    README.md (user guide), scenario-data.json (JEV scenario),
+    expected-results.md (verified outcomes)
 docs/                               architecture, decision model, demo guide,
     historical design records
 ```

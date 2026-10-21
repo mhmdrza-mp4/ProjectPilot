@@ -1,0 +1,75 @@
+{
+  "sample_project": "Production_Line_Commissioning.mpp",
+  "project_name": "Production Line Commissioning — Sample Project",
+  "purpose": "Companion scenario data for the bundled sample Microsoft Project file. Documents the Consequence of Delay (JEV) integration's actual INPUT CONTRACT for tasks in this sample, plus a clear, honest basis for what the assessment would be judged on.",
+  "important": [
+    "No JEV API call is made while running the sample offline.",
+    "No values in this file are presented as live JEV responses.",
+    "Consequence of Delay (CD) in offline mode is provisional (0.5) and flagged for review.",
+    "With a configured TYPESAFE_API_KEY the app sends task_name + task_notes to the real JEV integration; these are the exact fields documented below.",
+    "Manual assessment levels below are demonstrations, not API calls."
+  ],
+  "input_contract": {
+    "question_name": "consequence_of_delay",
+    "question_type": "score",
+    "scale": "0..3, divided by 3 to become the CD share of the priority index",
+    "instructions": "What is the worst NON-SCHEDULE business consequence (cost, safety, quality, contract, production) if this activity finishes late? Judge only the business impact of the delay itself.",
+    "levels": [
+      "Level 0 - Only the activity itself is delayed; there is no material downstream non-schedule business consequence.",
+      "Level 1 - The delay causes a small, recoverable consequence, such as limited added cost or rework.",
+      "Level 2 - The delay causes a significant consequence involving cost, quality risk, or a customer/supplier commitment.",
+      "Level 3 - The delay can cause a major consequence: production stoppage, a safety/regulatory violation, a contractual penalty, or the loss of a non-movable production/window/resource opportunity."
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "delayed-equipment-delivery",
+      "task_name": "Delivery: extrusion press",
+      "task_notes": "A late delivery of the press blocks every mechanical installation task downstream and jeopardizes the production start date.",
+      "manual_assessment_level": 3,
+      "assessment_rationale": "Press delivery is the single gate that every mechanical installation task waits on; the production start date is contractually anchored. Crosses into 'production stoppage' territory if it slips."
+    },
+    {
+      "id": "late-electrical-installation",
+      "task_name": "Motor connections",
+      "task_notes": "Late motor connections stall every downstream integration task; production start slips.",
+      "manual_assessment_level": 2,
+      "assessment_rationale": "Significant consequence (widespread downstream stall) but still recoverable by extending the shift and re-sequencing; not an automatic production stoppage."
+    },
+    {
+      "id": "delayed-safety-approval",
+      "task_name": "Integrated safety inspection",
+      "task_notes": "Missing safety approval blocks the energization and integration phases; regulatory and safety consequences are material.",
+      "manual_assessment_level": 3,
+      "assessment_rationale": "Safety sign-off is regulatory and non-movable; a slip here is explicitly a safety/regulatory violation exposure and directly blocks the energization phase."
+    },
+    {
+      "id": "late-control-system-integration",
+      "task_name": "Integrate PLC with SCADA",
+      "task_notes": "Delays here stall the integration phase and the production start; commercial impact of late automation is high.",
+      "manual_assessment_level": 2,
+      "assessment_rationale": "Strong commercial impact and a widespread downstream stall, but not an immediate safety or contractual-penalty case."
+    },
+    {
+      "id": "delayed-trial-production",
+      "task_name": "Trial production run 1",
+      "task_notes": "A late trial run pushes back the production start; customer commitments assume this window.",
+      "manual_assessment_level": 2,
+      "assessment_rationale": "Customer commitments depend on this window; a slip risks contractual exposure but typically does not halt an already-running production line."
+    },
+    {
+      "id": "vendor-supplier-delay",
+      "task_name": "Vendor build monitoring: press",
+      "task_notes": "Vendor supplier delay flagged; re-plan if factory acceptance slips — production start depends on it.",
+      "manual_assessment_level": 2,
+      "assessment_rationale": "The press build monitoring is the early-warning task for the delivery scenario; recoverable with a change of shipping mode or factory acceptance reprioritization."
+    },
+    {
+      "id": "low-impact-background",
+      "task_name": "Lighting circuits (final)",
+      "task_notes": null,
+      "manual_assessment_level": 0,
+      "assessment_rationale": "Final lighting has no downstream non-schedule business consequence; included as a baseline-level example against the high-consequence scenarios."
+    }
+  ]
+}

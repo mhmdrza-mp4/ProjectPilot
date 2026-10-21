@@ -191,6 +191,10 @@ def render_project_section(context: UiContext) -> None:
             "or load the active Microsoft Project schedule to start a "
             "real planning cycle.",
         )
+        with st.expander("Sample MSP Project", expanded=False):
+            st.markdown(components.sample_project_guide_text())
+            st.caption("Full path of the bundled sample `.mpp`:")
+            st.code(components.sample_project_path(), language="text")
         return
 
     state = workflow.project_state
@@ -203,6 +207,10 @@ def render_project_section(context: UiContext) -> None:
         st.metric("Capture", rows[-1]["Value"])
     with second:
         st.table(rows[1:4])
+    with st.expander("Sample MSP Project", expanded=False):
+        st.markdown(components.sample_project_guide_text())
+        st.caption("Full path of the bundled sample `.mpp`:")
+        st.code(components.sample_project_path(), language="text")
     for warning in state.capture_warnings:
         st.warning(f"**Capture limitation (MSP mapping):** {warning}")
     with st.expander("New planning cycle", expanded=False):

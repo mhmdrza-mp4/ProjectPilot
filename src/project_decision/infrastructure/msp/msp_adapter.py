@@ -18,11 +18,15 @@ Callers receive plain domain objects:
         client.disconnect()
 
 Read-only guarantee: nothing in the pipeline writes to Microsoft Project.
+The mapping can omit in-memory references to rows it could not map
+(summary/inactive tasks, unmapped resources); those omissions are counted
+and exposed as capture warnings - never invented or silently hidden.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime
 from typing import Iterator
 
 from project_decision.domain.constraint import Constraint
@@ -47,6 +51,12 @@ class MspProjectAdapter:
 
     def __init__(self, com_client: MspComClient) -> None:
         self._com = com_client
+        self._last_capture_warnings: tuple[str, ...] = ()
+
+    @property
+    def last_capture_warnings(self) -> tuple[str, ...]:
+        """Non-fatal omissions from the most recent read (empty = complete)."""
+        return self._last_capture_warnings
 
     def read_active_project(self) -> Project:
         """Read the project currently active in Microsoft Project."""
@@ -57,8 +67,12 @@ class MspProjectAdapter:
         tasks, milestones = self._read_tasks(msp_project, minutes_per_day)
         resources = self._read_resources(msp_project)
         constraints = self._read_deadline_constraints(msp_project)
+        dates = self._read_project_dates(msp_project)
 
-        tasks = _drop_references_to_unmapped(tasks, {r.id for r in resources})
+        tasks, warnings = _drop_references_to_unmapped(
+            tasks, {r.id for r in resources}
+        )
+        self._last_capture_warnings = warnings
         return Project(
             id=name or "msp-project",
             name=name or "Unnamed Microsoft Project",
@@ -66,6 +80,7 @@ class MspProjectAdapter:
             resources=resources,
             milestones=milestones,
             constraints=constraints,
+            **dates,
         )
 
     def read_active_project_state(
@@ -79,7 +94,8 @@ class MspProjectAdapter:
         if captured_at is None:
             captured_at = datetime.now()
         project = self.read_active_project()
-        return project.capture_state(captured_at)
+        state = project.capture_state(captured_at)
+        return replace(state, capture_warnings=self._last_capture_warnings)
 
     # -- internal ----------------------------------------------------------
 
@@ -89,6 +105,21 @@ class MspProjectAdapter:
         except Exception as exc:
             raise MspReadError("cannot read the project name") from exc
         return str(name) if name else ""
+
+    def _read_project_dates(self, msp_project: object) -> dict[str, date | None]:
+        """Read optional project-level schedule/baseline dates.
+
+        Every entry that Microsoft Project leaves unset (or reports as
+        unreadable/'NA') stays None — the value is represented as
+        "not available", never invented.
+        """
+        return {
+            "project_start": mapper.optional_date(msp_project, "Start"),
+            "project_finish": mapper.optional_date(msp_project, "Finish"),
+            "status_date": mapper.optional_date(msp_project, "StatusDate"),
+            "baseline_start": mapper.optional_date(msp_project, "BaselineStart"),
+            "baseline_finish": mapper.optional_date(msp_project, "BaselineFinish"),
+        }
 
     def _read_tasks(
         self, msp_project: object, minutes_per_day: float
@@ -147,17 +178,42 @@ def _resource_name(raw: object) -> str | None:
         return None
 
 
-def _drop_references_to_unmapped(tasks: list[Task], resource_ids: set[str]) -> list[Task]:
+def _drop_references_to_unmapped(
+    tasks: list[Task], resource_ids: set[str]
+) -> tuple[list[Task], tuple[str, ...]]:
     """Remove dependency/assignment references to tasks we skipped.
 
     MSP may legitimately show predecessors on summary or inactive tasks;
     those rows are not mapped, so the domain would reject the references.
-    Dropping them is a documented limitation, not a silent data change.
+    Dropping them is a deliberate limitation, but it is never silent: the
+    returned warnings count the references omitted, by kind, and the
+    adapter exposes them (``last_capture_warnings``) plus attaches them to
+    the captured ``ProjectState``.
     """
     task_ids = {task.id for task in tasks}
+    dropped_dependencies = 0
+    dropped_assignments = 0
     for task in tasks:
-        task.dependency_ids = [d for d in task.dependency_ids if d in task_ids]
-        task.assigned_resource_ids = [
+        dependencies = [d for d in task.dependency_ids if d in task_ids]
+        assignments = [
             r for r in task.assigned_resource_ids if r in resource_ids
         ]
-    return tasks
+        dropped_dependencies += len(task.dependency_ids) - len(dependencies)
+        dropped_assignments += len(task.assigned_resource_ids) - len(assignments)
+        task.dependency_ids = dependencies
+        task.assigned_resource_ids = assignments
+
+    warnings: list[str] = []
+    if dropped_dependencies:
+        warnings.append(
+            f"{dropped_dependencies} predecessor reference(s) pointed at "
+            "tasks that could not be mapped (summary/inactive rows) and "
+            "were omitted from the captured snapshot."
+        )
+    if dropped_assignments:
+        warnings.append(
+            f"{dropped_assignments} resource-assignment reference(s) pointed "
+            "at resources that could not be mapped and were omitted from the "
+            "captured snapshot."
+        )
+    return tasks, tuple(warnings)

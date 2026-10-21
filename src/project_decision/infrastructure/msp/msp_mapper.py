@@ -14,7 +14,9 @@ map to a safe default; essential fields (id, name) raise
 in the domain at all.
 
 Units:
-- COM durations are given in MINUTES; convert with ``duration_minutes_to_days``.
+- COM durations (``Duration``) and slack (``TotalSlack``) are given in
+  MINUTES; convert with ``duration_minutes_to_days`` /
+  ``optional_total_slack_days``.
 - COM ``PercentComplete`` is 0..100; the domain wants a 0.0..1.0 fraction.
 - COM dates are timezone-aware ``pywintypes`` datetimes; converted to ``date``.
 - COM ``Resource.MaxUnits`` is a fraction (1.0 = 100 % availability).
@@ -81,7 +83,68 @@ def percent_complete_to_fraction(percent: Any) -> float:
     return max(0.0, min(100.0, float(percent))) / 100.0
 
 
+def optional_total_slack_days(total_slack: Any, minutes_per_day: float = 480.0) -> float | None:
+    """Convert COM ``TotalSlack`` (minutes) into working days, or None.
+
+    Unlike ``Duration``, a genuinely missing/unreadable TotalSlack maps
+    to ``None`` (not to zero): zero slack is a meaningful, highly
+    significant value (a critical task), so absence must stay
+    distinguishable. Negative slack is valid — MSP reports it for
+    activities that are already late — and is preserved, never clamped.
+    """
+    if total_slack is None or not minutes_per_day:
+        return None
+    try:
+        minutes = float(total_slack)
+    except (TypeError, ValueError):
+        return None
+    return minutes / float(minutes_per_day)
+
+
+def optional_critical(critical: Any) -> bool | None:
+    """Normalize MSP's ``Critical`` flag; None when missing/unreadable.
+
+    COM exposes booleans as -1/0; MSP may also deliver 'NA'-style
+    placeholders. Anything that is not a definite truth value maps to
+    ``None`` instead of a guessed flag.
+    """
+    if critical is None:
+        return None
+    try:
+        if isinstance(critical, bool):
+            return critical
+        return bool(int(critical))
+    except (TypeError, ValueError):
+        return None
+
+
+def optional_notes(notes: Any) -> str | None:
+    """Read MSP task ``Notes``; None when absent, empty, or unreadable.
+
+    MSP returns an empty string for tasks without notes; empty and
+    whitespace-only text carry no information, so both stay ``None``.
+    """
+    if notes is None:
+        return None
+    text = str(notes).strip()
+    return text or None
+
+
 # -- record selection ----------------------------------------------------------
+
+
+def optional_date(msp_record: Any, property_name: str) -> date | None:
+    """Read an optional date property; None when missing or unreadable.
+
+    Used for project-level dates (Start, Finish, StatusDate,
+    BaselineStart, BaselineFinish). Microsoft Project reports unset
+    values in inconsistent ways (None, empty variants, or 'NA'); all of
+    them become None here — never a guessed date.
+    """
+    try:
+        return to_date(_get(msp_record, property_name))
+    except MspMappingError:
+        return None
 
 
 def is_mappable_task(msp_task: Any) -> bool:
@@ -138,6 +201,15 @@ def map_task(msp_task: Any, *, minutes_per_day: float = 480.0) -> Task:
         finish=finish,
         dependency_ids=dependency_ids(msp_task),
         assigned_resource_ids=assigned_resource_ids(msp_task),
+        total_slack_days=optional_total_slack_days(
+            _get(msp_task, "TotalSlack"), minutes_per_day
+        ),
+        is_critical=optional_critical(_get(msp_task, "Critical")),
+        notes=optional_notes(_get(msp_task, "Notes")),
+        # bool(...) keeps the same truthiness convention as
+        # is_mappable_task: the Summary row check treats any truthy
+        # value (including an 'NA' placeholder) as a summary row.
+        is_summary=bool(_get(msp_task, "Summary", False)),
     )
     return task
 
@@ -174,13 +246,27 @@ def map_resource(msp_resource: Any) -> Resource:
 def dependency_ids(msp_task: Any) -> list[str]:
     """UniqueIDs of the tasks this task depends on (predecessors).
 
-    Uses ``TaskDependencies``, filtering to finish/start-type predecessors
-    that are readable. Tasks skipped by ``is_mappable_task`` (e.g.
-    summary rows) also appear here; the adapter removes those references
-    once it knows which tasks were mapped.
+    ``Task.TaskDependencies`` is a BIDIRECTIONAL collection: it contains
+    every link the task participates in, both as the successor (incoming
+    links) and as the predecessor (outgoing links — where ``From`` is
+    the task itself). Only links whose ``To`` is this task carry a
+    predecessor; outgoing links are skipped so that a task never
+    reports itself as its own predecessor. This direction is verified
+    against real COM data (Step 14): for task 3 the collection returned
+    one incoming (From=2) and two outgoing (From=3) links.
+
+    All four link types (FS/SS/SF/FF) share From→To direction, so the
+    ``To`` check is type-independent. Tasks skipped by
+    ``is_mappable_task`` (e.g. summary rows) also appear here; the
+    adapter removes those references once it knows which tasks were
+    mapped.
     """
+    own_id = _get(msp_task, "UniqueID")
     ids: list[str] = []
     for dependency in _iter(_get(msp_task, "TaskDependencies")):
+        target = _get(dependency, "To")
+        if own_id is not None and _get(target, "UniqueID") != own_id:
+            continue
         source = _get(dependency, "From")
         source_id = _get(source, "UniqueID")
         if source_id is not None:

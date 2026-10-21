@@ -44,6 +44,45 @@ class TestConversions:
         assert mapper.percent_complete_to_fraction(150) == 1.0
         assert mapper.percent_complete_to_fraction(-10) == 0.0
 
+    def test_total_slack_minutes_to_days(self):
+        assert mapper.optional_total_slack_days(480) == 1.0
+        assert mapper.optional_total_slack_days(240.0) == 0.5
+
+    def test_total_slack_zero_is_real_zero_not_missing(self):
+        # Zero slack is meaningful (critical path); absence must stay None.
+        assert mapper.optional_total_slack_days(0) == 0.0
+        assert mapper.optional_total_slack_days(None) is None
+
+    def test_total_slack_negative_is_preserved_not_clamped(self):
+        assert mapper.optional_total_slack_days(-480) == pytest.approx(-1.0)
+
+    def test_total_slack_na_placeholder_maps_to_none(self):
+        assert mapper.optional_total_slack_days("NA") is None
+        assert mapper.optional_total_slack_days("") is None
+
+    def test_total_slack_without_minutes_per_day_is_unavailable(self):
+        assert mapper.optional_total_slack_days(480, minutes_per_day=0) is None
+
+    def test_critical_boolean_variants(self):
+        assert mapper.optional_critical(0) is False
+        assert mapper.optional_critical(1) is True
+        # COM exposes True as -1.
+        assert mapper.optional_critical(-1) is True
+        assert mapper.optional_critical(True) is True
+        assert mapper.optional_critical(False) is False
+
+    def test_critical_missing_or_placeholder_is_none(self):
+        assert mapper.optional_critical(None) is None
+        assert mapper.optional_critical("NA") is None
+
+    def test_notes_are_kept_verbatim(self):
+        assert mapper.optional_notes("handoff to QA") == "handoff to QA"
+
+    def test_notes_empty_and_whitespace_mean_none(self):
+        assert mapper.optional_notes("") is None
+        assert mapper.optional_notes("   \n ") is None
+        assert mapper.optional_notes(None) is None
+
 
 class TestTaskSelection:
     def test_normal_task_is_mappable(self):
@@ -121,10 +160,28 @@ class TestTaskMapping:
         assert task.finish is None
 
     def test_dependencies_read_from_task_dependencies(self):
-        raw = self.make_task(
-            TaskDependencies=[FakeMspDependency(From=FakeMspTask(UniqueID=99, Name="pred"))]
-        )
+        raw = self.make_task()
+        raw.TaskDependencies = [
+            FakeMspDependency(From=FakeMspTask(UniqueID=99, Name="pred"), To=raw)
+        ]
         task = mapper.map_task(raw)
+        assert task.dependency_ids == ["99"]
+
+    def test_outgoing_links_are_not_predecessors(self):
+        """Regression (real MSP, Step 14): Task.TaskDependencies is
+        bidirectional — a task's outgoing links (where From is the task
+        itself) made the real read report 'task 2 depends on itself'
+        and duplicate self-references. Only incoming links count."""
+        raw = self.make_task()
+        raw.TaskDependencies = [
+            FakeMspDependency(From=FakeMspTask(UniqueID=99, Name="pred"), To=raw),
+            # Outgoing links: the task is the From end (successor side).
+            FakeMspDependency(From=raw, To=FakeMspTask(UniqueID=51, Name="succ one")),
+            FakeMspDependency(From=raw, To=FakeMspTask(UniqueID=52, Name="succ two")),
+        ]
+        task = mapper.map_task(raw)
+        # Only the incoming link is a predecessor; the two outgoing
+        # (duplicate From=self) links are ignored, never self-references.
         assert task.dependency_ids == ["99"]
 
     def test_assigned_resources_read_from_resources(self):
@@ -133,6 +190,69 @@ class TestTaskMapping:
         )
         task = mapper.map_task(raw)
         assert task.assigned_resource_ids == ["5"]
+
+    def test_scheduling_fields_are_mapped(self):
+        raw = self.make_task(
+            TotalSlack=240.0,        # 0.5 working days
+            Critical=True,
+            Notes="depends on vendor confirmation",
+        )
+        task = mapper.map_task(raw)
+
+        assert task.total_slack_days == 0.5
+        assert task.is_critical is True
+        assert task.notes == "depends on vendor confirmation"
+
+    def test_scheduling_fields_missing_map_to_none(self):
+        task = mapper.map_task(self.make_task())
+
+        assert task.total_slack_days is None
+        assert task.is_critical is None
+        assert task.notes is None
+
+    def test_scheduling_fields_unavailable_map_to_none(self):
+        raw = self.make_task(TotalSlack="NA", Critical="NA", Notes="   ")
+        task = mapper.map_task(raw)
+
+        assert task.total_slack_days is None
+        assert task.is_critical is None
+        assert task.notes is None
+
+    def test_scheduling_fields_negative_slack_kept(self):
+        task = mapper.map_task(self.make_task(TotalSlack=-960.0, Critical=True))
+        assert task.total_slack_days == pytest.approx(-2.0)
+        assert task.is_critical is True
+
+    def test_summary_flag_is_mapped(self):
+        task = mapper.map_task(self.make_task(Summary=True))
+        assert task.is_summary is True
+
+    def test_normal_task_maps_to_not_summary(self):
+        task = mapper.map_task(self.make_task(Summary=False))
+        assert task.is_summary is False
+
+    def test_unreadable_com_properties_map_to_none_not_crash(self):
+        class BrokenTaskProps:
+            UniqueID = 11
+            Name = "Design"
+
+            @property
+            def TotalSlack(self):
+                raise ValueError("com_error: broken property")
+
+            @property
+            def Critical(self):
+                raise ValueError("com_error: broken property")
+
+            @property
+            def Notes(self):
+                raise ValueError("com_error: broken property")
+
+        task = mapper.map_task(BrokenTaskProps())
+
+        assert task.total_slack_days is None
+        assert task.is_critical is None
+        assert task.notes is None
 
 
 class TestMilestoneMapping:

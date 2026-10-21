@@ -35,6 +35,7 @@ class MspComClient:
 
     def __init__(self) -> None:
         self._application: Any | None = None
+        self._co_initialized = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -43,10 +44,15 @@ class MspComClient:
 
         This attaches to a running instance or starts one, as Microsoft
         Project's COM automation dictate. It never opens a document.
+
+        COM is initialized for the calling thread explicitly: Streamlit
+        (and other threaded hosts) run scripts on secondary threads where
+        pywin32 requires ``pythoncom.CoInitialize()``.
         """
         if self._application is not None:
             return
         try:
+            import pythoncom
             import pywintypes
             import win32com.client
         except ImportError as exc:
@@ -54,6 +60,8 @@ class MspComClient:
                 "pywin32 is not installed; install it with 'pip install pywin32'"
             ) from exc
         try:
+            pythoncom.CoInitialize()
+            self._co_initialized = True
             self._application = win32com.client.Dispatch(_MSP_APPLICATION)
         except pywintypes.com_error as exc:
             self._application = None
@@ -64,6 +72,14 @@ class MspComClient:
     def disconnect(self) -> None:
         """Release our COM references only. Never closes Microsoft Project."""
         self._application = None
+        if getattr(self, "_co_initialized", False):
+            self._co_initialized = False
+            try:
+                import pythoncom
+
+                pythoncom.CoUninitialize()
+            except Exception:            # uninitializing must never break the host thread
+                pass
 
     def is_available(self) -> bool:
         """True if a COM connection to Microsoft Project can be made.

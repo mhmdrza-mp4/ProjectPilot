@@ -78,8 +78,8 @@ class TestRealMspRead:
         resource_ids = {resource.id for resource in project.resources}
 
         for task in project.tasks:
-            assert task.dependency_ids <= task_ids
-            assert task.assigned_resource_ids <= resource_ids
+            assert set(task.dependency_ids) <= task_ids
+            assert set(task.assigned_resource_ids) <= resource_ids
 
     def test_state_snapshot_matches_project(self, adapter):
         captured_at = datetime.now()

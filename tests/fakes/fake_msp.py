@@ -21,7 +21,12 @@ class FakeMspResource:
 
 @dataclass
 class FakeMspDependency:
+    # Real COM shape: a link has BOTH ends — From is the predecessor,
+    # To is the successor. Task.TaskDependencies contains a task's
+    # incoming AND outgoing links (verified against real MSP, Step 14),
+    # so the fakes model both ends too.
     From: object  # FakeMspTask
+    To: object  # FakeMspTask
 
 
 @dataclass
@@ -36,6 +41,9 @@ class FakeMspTask:
     Deadline: datetime | None = None
     Summary: bool = False
     Active: bool = True
+    TotalSlack: float | None = None        # COM unit: minutes; may be negative
+    Critical: bool | None = None
+    Notes: str | None = None
     TaskDependencies: list[FakeMspDependency] = field(default_factory=list)
     Resources: list[FakeMspResource] = field(default_factory=list)
 
@@ -46,6 +54,11 @@ class FakeMspProject:
     MinutesPerDay: float = 480.0
     Tasks: list[FakeMspTask] = field(default_factory=list)
     Resources: list[FakeMspResource] = field(default_factory=list)
+    Start: datetime | None = None
+    Finish: datetime | None = None
+    StatusDate: datetime | None = None
+    BaselineStart: datetime | None = None
+    BaselineFinish: datetime | None = None
 
 
 Y2026 = datetime(2026, 6, 1, 8, 0)

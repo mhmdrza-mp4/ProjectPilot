@@ -72,7 +72,10 @@ def demo_project() -> FakeMspProject:
             Start=datetime(2026, 6, 5, 8, 0),
             Finish=datetime(2026, 6, 9, 17, 0),
             TaskDependencies=[
-                FakeMspDependency(From=FakeMspTask(UniqueID=3, Name="Design"))
+                FakeMspDependency(
+                    From=FakeMspTask(UniqueID=3, Name="Design"),
+                    To=FakeMspTask(UniqueID=4, Name="Implementation"),
+                )
             ],
             Deadline=datetime(2026, 7, 1, 17, 0),
         ),
@@ -83,12 +86,44 @@ def demo_project() -> FakeMspProject:
         MinutesPerDay=480.0,
         Tasks=tasks,
         Resources=[alice, bob],
+        Start=datetime(2026, 6, 1, 8, 0),
+        Finish=datetime(2026, 6, 10, 17, 0),
+        StatusDate=datetime(2026, 6, 5, 9, 0),
+        BaselineStart=datetime(2026, 6, 1, 8, 0),
+        # No baseline finish has been saved in this demo project:
+        BaselineFinish=None,
     )
 
 
 @pytest.fixture
 def adapter() -> MspProjectAdapter:
     return MspProjectAdapter(FakeComClient(demo_project()))
+
+
+class TestProjectDates:
+    def test_project_dates_are_mapped(self, adapter: MspProjectAdapter):
+        from datetime import date as date_type
+
+        project = adapter.read_active_project()
+
+        assert project.project_start == date_type(2026, 6, 1)
+        assert project.project_finish == date_type(2026, 6, 10)
+        assert project.status_date == date_type(2026, 6, 5)
+        assert project.baseline_start == date_type(2026, 6, 1)
+
+    def test_missing_baseline_is_represented_as_none(self, adapter: MspProjectAdapter):
+        project = adapter.read_active_project()
+
+        # The demo project has no baseline finish; it must stay None
+        # (not invented, not defaulted), so delay metrics report honestly.
+        assert project.baseline_finish is None
+
+    def test_state_carries_project_dates(self, adapter: MspProjectAdapter):
+        state = adapter.read_active_project_state()
+
+        assert state.project_start is not None
+        assert state.baseline_finish is None
+        assert state.project_name == "Example Project"
 
 
 class TestReadActiveProject:
@@ -127,13 +162,65 @@ class TestReadActiveProject:
             FakeMspTask(
                 UniqueID=10,
                 Name="Depends on summary",
-                TaskDependencies=[FakeMspDependency(From=FakeMspTask(1, "Planning"))],
+                TaskDependencies=[
+                    FakeMspDependency(From=FakeMspTask(1, "Planning"),
+                                      To=FakeMspTask(10, "Depends on summary"))
+                ],
             )
         )
-        project = MspProjectAdapter(FakeComClient(raw)).read_active_project()
+        adapter = MspProjectAdapter(FakeComClient(raw))
+        project = adapter.read_active_project()
 
         task = next(t for t in project.tasks if t.id == "10")
         assert task.dependency_ids == []
+        # The omission is counted and exposed, never silent.
+        assert adapter.last_capture_warnings
+        assert "predecessor reference" in adapter.last_capture_warnings[0]
+        assert "1 " in adapter.last_capture_warnings[0]
+
+    def test_assignment_to_an_unmapped_resource_is_dropped_and_reported(self):
+        raw = demo_project()
+        raw.Tasks.append(
+            FakeMspTask(
+                UniqueID=11,
+                Name="Ghost resource",
+                Duration=480.0,
+                Resources=[FakeMspResource(UniqueID=999, Name="Ghost")],
+            )
+        )
+        adapter = MspProjectAdapter(FakeComClient(raw))
+        project = adapter.read_active_project()
+
+        task = next(t for t in project.tasks if t.id == "11")
+        assert task.assigned_resource_ids == []
+        assert any(
+            "resource-assignment reference" in warning
+            for warning in adapter.last_capture_warnings
+        )
+
+    def test_complete_mapping_reports_no_capture_warnings(self, adapter):
+        adapter.read_active_project()
+
+        assert adapter.last_capture_warnings == ()
+        assert adapter.read_active_project_state().capture_warnings == ()
+
+    def test_state_carries_the_capture_warnings(self):
+        raw = demo_project()
+        raw.Tasks.append(
+            FakeMspTask(
+                UniqueID=10,
+                Name="Depends on summary",
+                TaskDependencies=[
+                    FakeMspDependency(From=FakeMspTask(1, "Planning"),
+                                      To=FakeMspTask(10, "Depends on summary"))
+                ],
+            )
+        )
+        adapter = MspProjectAdapter(FakeComClient(raw))
+        state = adapter.read_active_project_state()
+
+        assert state.capture_warnings == adapter.last_capture_warnings
+        assert state.capture_warnings  # the diagnostic reaches the snapshot
 
     def test_milestone_appears_in_tasks_and_milestones(self, adapter: MspProjectAdapter):
         project = adapter.read_active_project()

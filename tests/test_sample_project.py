@@ -66,7 +66,8 @@ class TestExampleArtifacts:
     def test_guide_mentions_planning_window_and_msp_workflow(self):
         guide = read_guide()
         # Real operational instructions, not marketing.
-        assert "Load Active MSP Project" in guide
+        assert "[L]" in guide
+        assert "active" in guide.lower()
         assert "2026-10-22" in guide  # the documented planning window
         assert "read-only" in guide.lower()
         # The 4 files this feature actually ships must all be referenced.
@@ -207,25 +208,26 @@ class TestExpectedResultsDocumentation:
 
 class TestUiDiscoverability:
     def test_sample_path_is_absolute_and_points_to_a_specific_file(self):
-        from app.ui.components import sample_project_path
+        from project_decision.tui import sample_project_path
 
         path = sample_project_path()
         assert path.endswith("Production_Line_Commissioning.mpp")
 
     def test_sample_guide_is_honest_about_offline_vs_live(self):
-        from app.ui.components import sample_project_guide_text
+        from project_decision.tui import sample_project_guide_text
 
         text = sample_project_guide_text()
-        assert "Sample MSP Project" in text
-        assert "Demo Mode" in text
-        assert "Load Active MSP Project" in text
+        assert "sample msp project" in text.lower()
+        assert "Microsoft Project" in text
+        # The real load action exists: [L] loads the active MSP plan.
+        assert "[L]" in text
         assert "read-only" in text.lower()
         assert "TYPESAFE_API_KEY" in text
-        # Real limited claims: no "loaded", no API call fabrications.
+        # Real limited claims: no API call fabrications.
         assert "provisional" in text.lower()
 
     def test_sample_guide_references_the_doc_directory(self):
-        from app.ui.components import sample_project_guide_text
+        from project_decision.tui import sample_project_guide_text
 
         assert "examples/production-line-commissioning/" in (
             sample_project_guide_text()

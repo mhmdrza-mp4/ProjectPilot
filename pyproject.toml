@@ -3,10 +3,14 @@ name = "project-decision"
 version = "0.1.0"
 description = "Decision-support system that helps project planners choose project-control decisions for Microsoft Project schedules."
 requires-python = ">=3.12"
-dependencies = ["streamlit>=1.36", "plotly>=5.20", "typesafe-sdk>=0.7.5"]
+dependencies = [
+    "textual>=8.0",
+    "rich>=13.0",
+    "typesafe-sdk>=0.7.5",
+]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=1.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -18,10 +22,14 @@ packages = ["src/project_decision"]
 [project.optional-dependencies]
 msp = ["pywin32; sys_platform == 'win32'"]
 
+[project.scripts]
+pda = "project_decision.tui:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-m 'not msp and not jev'"
+asyncio_mode = "auto"
 markers = [
     "msp: integration tests that require a real Microsoft Project via COM (run with: pytest -m msp)",
     "jev: live integration tests that require TYPESAFE_API_KEY and call the real TypeSafe API (run with: pytest -m jev)",

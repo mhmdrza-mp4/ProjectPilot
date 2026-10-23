@@ -323,10 +323,6 @@ Distributed under the **MIT License**.
 
 <div align="center">
 
-  <strong>ProjectPilot</strong>
-
-  <p><em>See the priorities. Understand the reasons. Make the decision.</em></p>
-
   <p>
     <a href="#readme-top"><img src="https://img.shields.io/badge/⬆️_Back_to_Top-1E293B?style=for-the-badge" alt="Back to Top"></a>
   </p>

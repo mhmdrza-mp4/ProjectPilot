@@ -5,11 +5,10 @@ application's **live, read-only MSP-backed workflow** with a realistic
 industrial project: commissioning a new production line at a
 manufacturing site.
 
-This is **not** the built-in Demo Mode. Demo Mode uses a small,
-hard-coded fixture and needs no Microsoft Project at all. This sample
-is a real Microsoft Project file — open it in Microsoft Project, make
-it the active project, and analyze it through the application's own
-MSP integration.
+This is not a canned data fixture. It is a real Microsoft Project
+file — open it in Microsoft Project, make it the active project, and
+analyze it through the application's own read-only MSP integration
+in the terminal dashboard.
 
 ## Scenario
 
@@ -40,22 +39,31 @@ integration, trial production). These are the intended feed for the
 
 ## How to run the app on the sample
 
-1. **Install and run the application** as described in the main README.
+1. **Install and launch the terminal application** as described in the
+   main README (`pda`, or `python -m project_decision.tui`). Settings
+   keys used below: load **[L]**, planning period **[P]**, confirm
+   session **[C]**, run analysis **[A]**, JEV mode **[J]**, re-capture
+   **[R]**, timeline **[T]**, sample guide **[S]**, help **[?]**,
+   quit **[Q]**.
 2. **Open the sample in Microsoft Project** — double-click
    `Production_Line_Commissioning.mpp` or use *File ▸ Open*. The file
    sits in this directory. Make it the active project window.
-3. In the application's **Project** section, click **Load Active MSP Project**. The integration reads the file strictly read-only.
-4. **Pick a planning period.** A recommended first window is
-   `2026-10-22 → 2026-11-06` (12 working days), which gives ~37
-   candidate activities across procurement, civil, mechanical,
+3. In the terminal dashboard, press **[L]** to load the active
+   Microsoft Project plan. The integration reads the file strictly
+   read-only; the top bar reports the real connection status.
+4. **Pick a planning period** by pressing **[P]**. A recommended first
+   window is `2026-10-22 → 2026-11-06` (12 working days), which gives
+   ~37 candidate activities across procurement, civil, mechanical,
    electrical, and automation work.
-5. Confirm the planning session, then run the decision analysis.
-   The dashboard shows the ranking, schedule pressure (SP), successor
-   impact (SI), consequence-of-delay (CD — provisional while offline),
-   resource conflicts, and review warnings.
-6. When you're done, **Start a new planning cycle** clears state.
-7. To return to the built-in Demo Mode, pick **Load Demo Project**
-   from the same section. Demo Mode needs no Microsoft Project at all.
+5. Press **[C]** to confirm the candidate session, then **[A]** to run
+   the decision analysis. The dashboard shows the ranking, schedule
+   pressure (SP), successor impact (SI), consequence-of-delay
+   (CD — provisional while offline), resource conflicts, and review
+   warnings. Move through the priority queue with the arrow keys; the
+   inspector updates for the selected activity.
+6. When you're done reviewing, press **[Q]** to quit. Press **[R]** at
+   any time to re-capture the project snapshot from Microsoft Project
+   (read-only again).
 
 ## What is NOT required
 

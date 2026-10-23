@@ -1,353 +1,334 @@
-# Project Decision Assistant
+<div align="center" id="readme-top">
 
-A deterministic, read-only **decision-support tool for Microsoft Project
-projects**: it turns a captured schedule snapshot into a transparent
-priority ranking of the activities a manager must choose between — and
-leaves the decision, always, with the human.
+  <h1>ProjectPilot</h1>
 
-> Decision-support, not decision-making. The system never executes a
-> ranking as an action, never writes back to Microsoft Project, and
-> never optimizes anything. Every number it prints can be traced to a
-> documented rule.
+  <p>
+    <strong>Transparent, Human-in-the-Loop Decision Support for Microsoft Project</strong>
+    <br>
+    <em>Turn complex project schedules into a clear, explainable list of activities that deserve attention first.</em>
+  </p>
 
-## Demo
+  <p>
+    <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=for-the-badge&logo=python&logoColor=white&labelColor=111827" alt="Python">
+    <img src="https://img.shields.io/badge/TUI-Textual-06B6D4?style=for-the-badge&logo=gnometerminal&logoColor=white&labelColor=111827" alt="Terminal UI">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=111827" alt="MIT License"></a>
+    <br>
+    <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&labelColor=111827" alt="Windows">
+    <img src="https://img.shields.io/badge/Decision_Model-TypeSafe_JEV-8B5CF6?style=for-the-badge&labelColor=111827" alt="TypeSafe JEV">
+    <img src="https://img.shields.io/badge/MS_Project-Read--Only-10B981?style=for-the-badge&labelColor=111827" alt="Microsoft Project">
+  </p>
 
-You can explore the complete application **fully offline** — no
-Microsoft Project, no JEV, no API key, no network:
+  <p>
+    <a href="#-dashboard-preview"><img src="https://img.shields.io/badge/🖥️_Dashboard-1E293B?style=flat-square" alt="Dashboard"></a>
+    <a href="#-the-problem--solution"><img src="https://img.shields.io/badge/💡_Why_ProjectPilot%3F-1E293B?style=flat-square" alt="Why ProjectPilot?"></a>
+    <a href="#-system-architecture--workflow"><img src="https://img.shields.io/badge/🔄_Architecture-1E293B?style=flat-square" alt="Architecture"></a>
+    <a href="#-priority-scoring-engine"><img src="https://img.shields.io/badge/🧮_Scoring_Model-1E293B?style=flat-square" alt="Scoring Model"></a>
+    <a href="#-quick-start"><img src="https://img.shields.io/badge/⚡_Quick_Start-1E293B?style=flat-square" alt="Quick Start"></a>
+    <a href="#-industrial-sample-project"><img src="https://img.shields.io/badge/🏭_Sample_Project-1E293B?style=flat-square" alt="Sample Project"></a>
+    <a href="#-license"><img src="https://img.shields.io/badge/📄_License-1E293B?style=flat-square" alt="License"></a>
+  </p>
 
-```text
-streamlit run app/streamlit_app.py
-```
+</div>
 
-Then click **Load Demo Project**. The demo flows through the *real*
-workflow and pipeline with a fixed, deterministic fixture
-("Production Line Commissioning"), so repeated runs always produce
-identical results. See `docs/demo.md` for a walked-through tour.
+---
 
-Real screenshots of the demo flow (captured from the running app with
-`scripts/capture_demo_screenshots.py` — nothing mocked or edited):
+## 🖥️ Dashboard Preview
 
-| Step | Screenshot |
-| --- | --- |
-| Project setup (choose source) | ![Project setup](docs/assets/demo_1_project_setup.png) |
-| Candidate selection (period + editable funnel) | ![Candidate selection](docs/assets/demo_2_candidate_selection.png) |
-| Decision dashboard (rank + review + chart) | ![Decision dashboard](docs/assets/demo_3_decision_dashboard.png) |
-| Task detail (contributions, consequence provenance, conflicts) | ![Task detail](docs/assets/demo_4_task_detail.png) |
+<div align="center">
+  <table>
+    <tr>
+      <td width="50%">
+        <img src="docs/assets/dashboard-1.png" alt="ProjectPilot terminal dashboard overview" width="100%">
+      </td>
+      <td width="50%">
+        <img src="docs/assets/dashboard-2.png" alt="ProjectPilot activity prioritization and inspection view" width="100%">
+      </td>
+    </tr>
+  </table>
+  <sub>ProjectPilot's terminal interface for reviewing project priorities and understanding the factors behind each result.</sub>
+</div>
 
-## Try the Application With a Real Microsoft Project File
+---
 
-A substantial, realistic sample project ships in the repository:
+## 💡 The Problem & Solution
 
-```
-examples/production-line-commissioning/Production_Line_Commissioning.mpp
-```
+Project managers work with schedules containing hundreds of activities, dependencies, dates, and resource assignments. Finding out which activities deserve attention first requires more than simply viewing a Gantt chart.
 
-- **What it is:** a ~120-task, 12-phase industrial commissioning
-  project (Production Line Commissioning — Sample Project, 10
-  resources, completed/in-progress/future activity mix, real resource
-  over-allocation to drive conflict detection).
-- **What it is NOT:** it is *not* the built-in Demo Mode. Demo Mode is
-  an offline, hard-coded fixture; this sample is a genuine Microsoft
-  Project file that must be *opened in Microsoft Project* and is then
-  read through the app's existing strict read-only MSP integration.
-- **Quick workflow** (Windows + Microsoft Project installed):
+**ProjectPilot** addresses one practical question:
 
-  1. Open
-     `examples/production-line-commissioning/Production_Line_Commissioning.mpp`
-     in Microsoft Project and leave it as the active project window.
-  2. Run the app (`streamlit run app/streamlit_app.py`) and click
-     **Load Active MSP Project** — the integration reads it
-     strictly read-only.
-  3. Pick a planning period (a recommended first window is
-     `2026-10-22 → 2026-11-06`), confirm the session, and run the
-     analysis.
+> *During the selected planning period, which activities should the project manager review first — and why?*
 
-  The same **Sample MSP Project** hint is surfaced in the app's
-  Project section (an expander under the Demo / Live buttons) so users
-  can discover it without leaving the UI. **No file is opened, saved,
-  or closed by this application.**
-- **JEV status on this sample:** Consequence of Delay stays offline
-  (provisional, flagged for review) unless a `TYPESAFE_API_KEY` is
-  configured. There is no fabricated live JEV path — see
-  `examples/production-line-commissioning/scenario-data.json` for the
-  real JEV input contract and *manual* assessment basis.
-- **Detailed guide and verified outcomes:** see
-  [the sample's own README](examples/production-line-commissioning/README.md)
-  and [expected-results.md](examples/production-line-commissioning/expected-results.md)
-  (the numbers there come from the real pipeline and the existing
-  `pytest -m msp` suite, all passing against this sample).
+Microsoft Project provides the scheduling data. ProjectPilot analyzes the available information and produces an explainable priority ranking to help managers focus their attention.
 
-## Problem
+| Operational Dimension | Microsoft Project Schedule | ProjectPilot |
+| :--- | :--- | :--- |
+| **Attention Scope** | Displays activities across the entire schedule | Helps focus on candidate activities within a selected planning period |
+| **Schedule Pressure** | Provides scheduling information such as total slack | Includes schedule pressure as a weighted component of the priority score |
+| **Downstream Impact** | Represents activity dependencies | Evaluates the downstream dependency footprint of candidate activities |
+| **Consequence of Delay** | Does not automatically provide a complete business-impact assessment | Can use TypeSafe JEV to assess delay consequences when the integration is available |
+| **Data Quality** | Reflects the data entered into the schedule | Surfaces relevant data gaps and review flags instead of silently treating missing information as certain |
+| **Schedule Safety** | Allows users to edit and update schedules | Reads a schedule snapshot without writing changes back to Microsoft Project |
 
-Managers periodically face a set of **incomplete project activities**
-but cannot give equal attention and resources to all of them. Some are
-critical, some have successors depending on them, some carry heavy
-business consequences if they slip, some share people who are already
-double-booked — and all of this lives *inside* the schedule tool, not
-in a comparable, explainable picture.
+> [!IMPORTANT]
+> **Decision Support, Not Automated Project Management**
+>
+> ProjectPilot helps the project manager understand priorities. It does not make final management decisions, automatically reschedule activities, or modify the original Microsoft Project plan.
 
-The Project Decision Assistant converts a captured project snapshot
-into:
+---
 
-1. **schedule pressure** — how little slack an activity has,
-2. **successor impact** — how much of the plan waits behind it,
-3. **consequence of delay** — how hard a slip hits the business
-   (evaluated qualitatively via the JEV/TypeSafe service, or kept
-   explicitly provisional offline),
+## ✨ Key Capabilities
 
-…combined into one normalized priority index (0–100) with an explicit
-review system for every honest gap in the data, and displayed as an
-ordered, explainable table a human decides from.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🔒 Read-Only Microsoft Project Integration</h3>
+      <p>Reads the active Microsoft Project schedule through Windows COM integration. Captured data can include activity names, dates, durations, progress, dependencies, slack, notes, milestones, and resource assignments. Summary rows are excluded from activity-level analysis, and relevant capture problems are surfaced as warnings.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>📅 Planning-Period Selection</h3>
+      <p>Select a planning window and review the candidate activities proposed for analysis. The workflow allows you to review the candidate set before confirming the session and running the analysis.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>⚖️ Explainable Priority Scoring</h3>
+      <p>Each scored activity is evaluated using three weighted components: Schedule Pressure (40%), Successor Impact (20%), and Consequence of Delay (40%). The interface presents the score and its component contributions to support human review.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>🔗 Dependency and Resource Signals</h3>
+      <p>Uses schedule dependencies to assess downstream impact and surfaces relevant resource-overlap signals when the captured assignments and dates support the analysis. These signals help identify activities worth reviewing; they do not perform resource leveling.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🛡️ Explicit Uncertainty and Review Flags</h3>
+      <p>When consequence information is unavailable or insufficient, ProjectPilot can use a clearly identified provisional value. Missing required scheduling inputs are not silently invented, and low-confidence JEV assessments are flagged for human review.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>⌨️ Keyboard-Driven Terminal Dashboard</h3>
+      <p>Built with Python, Textual, and Rich, the terminal interface provides a priority queue, activity inspection, score breakdowns, workflow controls, and status information for the project connection and analysis process.</p>
+    </td>
+  </tr>
+</table>
 
-## How It Works
+---
 
-```text
-Microsoft Project (read-only)  or  Demo fixture
-        ↓
-DecisionWorkflow (immutable states)
-        ↓
-Planning period chosen by the manager
-        ↓
-Candidate selection (defaults proposed, manager shapes the set)
-        ↓
-Schedule analysis (slack, successors)  +  Resource conflict analysis
-        ↓
-Jev consequence evaluation (optional; offline = provisional 0.5)
-        ↓
-Priority scoring (SP 0.40 + SI 0.20 + CD 0.40 → index 0–100)
-        ↓
-Deterministic ranking with documented tie-breaks
-        ↓
-Review center (missing data, provisional consequences, conflicts)
-        ↓
-Human decision
-```
+## 🔄 System Architecture & Workflow
 
-## Architecture
+<div align="center">
+  <img src="docs/assets/workflow.svg" alt="ProjectPilot workflow from Microsoft Project schedule capture to activity prioritization" width="95%">
+</div>
 
-Layered; dependencies point inward. Full description:
-`docs/architecture.md`.
+### Main Components
 
-```mermaid
-flowchart TD
-    APP["Streamlit UI (app/) — thin consumer"] -->|workflow functions only| WF
-    WF["DecisionWorkflow (immutable states)"] -->|loader callable| P
-    P["DecisionPipeline<br/>schedule → conflicts → consequence →<br/>scoring → ranking → review"]
-    P --> D["Domain (pure models, stdlib only)"]
-    MSP["infrastructure/msp<br/>read-only COM adapter"] -.->|ProjectState| WF
-    JEV["infrastructure/jev<br/>TypeSafe System One client"] -.->|ConsequenceEvaluator| P
-    DEMO["project_decision/demo<br/>offline fixture"] -.->|ProjectState| WF
-```
+- **Microsoft Project integration:** Captures the active schedule through Windows COM without writing changes back to the project.
+- **Project state and schedule analysis:** Maps captured data into the application's project representation and evaluates activity dates, dependencies, and schedule-related signals.
+- **Priority scoring engine:** Combines the three scoring components into a weighted priority index.
+- **TypeSafe JEV integration:** Supports consequence-of-delay assessment when the external service is configured and available.
+- **Terminal user interface:** Presents ranked activities, score explanations, warnings, and review information.
 
-- **`app/` (UI)** — widgets, formatting, charts, session state; AST
-  tests enforce that it never calls pipeline functions directly and
-  contains no business rules.
-- **`DecisionWorkflow`** — every user action returns a new immutable
-  state; staleness is computed, not guessed, so a result can never be
-  displayed against a silently changed session.
-- **`DecisionPipeline`** — each stage runs exactly once per analysis,
-  deterministically, with no hidden failure handling.
-- **Domain** — pure Python models; all snapshot semantics
-  (`None` = unavailable) live here.
+---
 
-## Decision Model
+## 🧮 Priority Scoring Engine
 
-Documented exactly, code-verified: `docs/decision-model.md`.
+$$\text{Priority Index} = 100 \times \left( \underbrace{0.40 \times SP}_{\text{Schedule Pressure}} + \underbrace{0.20 \times SI}_{\text{Successor Impact}} + \underbrace{0.40 \times CD}_{\text{Consequence of Delay}} \right)$$
 
-| Criterion | Weight | Formula |
-| --- | --- | --- |
-| Schedule Pressure (SP) | 0.40 | `1 - min(max(slack, 0), H) / H` |
-| Successor Impact (SI) | 0.20 | `min(successors, K) / K` |
-| Consequence of Delay (CD) | 0.40 | JEV score / 3, or provisional 0.5 |
+| Component | Weight | Description |
+| :--- | :---: | :--- |
+| **Schedule&nbsp;Pressure**&nbsp;(`SP`) | 40% | Estimates pressure based on available slack and scheduling data. Activities with little or no slack score higher; missing required data is explicitly flagged. |
+| **Successor&nbsp;Impact**&nbsp;(`SI`) | 20% | Evaluates the downstream dependency footprint. Activities that gate or affect multiple subsequent tasks receive higher priority. |
+| **Consequence&nbsp;of&nbsp;Delay**&nbsp;(`CD`) | 40% | Assesses potential business impacts (cost, safety, quality, contractual obligations, or production) via TypeSafe JEV (sending only activity name and notes) or an explicit provisional value. |
 
-```
-score = 100 × (0.40·SP + 0.20·SI + 0.40·CD)
-```
+### Live and Provisional Assessments
 
-The result is a **normalized prioritization index, 0–100**. It is NOT:
+When a usable JEV assessment is available, ProjectPilot can use it to calculate the consequence component.
 
-- a probability or a prediction,
-- a calibrated utility,
-- an automatic decision or an action.
+When JEV is unavailable or an assessment cannot be used, the application may use a provisional neutral value of `0.5`, according to the applicable scoring rules. The result must remain visibly provisional and subject to review.
 
-Weights are validated (must sum to 1.0) and **rejected, never silently
-normalized**. When an input is missing (e.g. no slack), the criterion
-stays `None` and **no total score is invented**; ranking tie-breaks,
-review flags, and "known beats missing" semantics are documented in
-`docs/decision-model.md` and covered by tests.
+A low-confidence JEV assessment is flagged for review rather than automatically treated as a verified result.
 
-## Review Semantics
+> [!NOTE]
+> A provisional score is not equivalent to a verified priority assessment. Interpret it alongside its status, component contributions, and review flags.
 
-The product never hides a gap; it flags it for review:
+### 🔐 Data Handling and Fallback Behavior
 
-- **Missing schedule data** — no slack/dates → SP unknown, task stays
-  unscored instead of a fabricated zero.
-- **Provisional consequence** — JEV unavailable/offline/notes missing →
-  CD is a neutral 0.5, provenance shown as `provisional`.
-- **Low confidence** — JEV confidence < 0.5 flags review but does NOT
-  alter the score (confidence is never a scoring multiplier).
-- **JEV failure/unavailability** — structured per-task
-  `failed`/`unavailable` states; one task's failure never affects
-  another's, and the run continues.
-- **Resource warnings** — only *proven* shared-and-overlapping pairs
-  (CONFLICT); shares that cannot be decided (UNKNOWN, e.g. a task
-  without dates) are reported without a warning.
-- Results affected by a changed session, changed parameters, or invalid
-  parameter input are cleared with an explanation — never displayed
-  stale or next to parameters they were not computed with.
+| Situation | ProjectPilot Behavior |
+| :--- | :--- |
+| **Usable JEV assessment available** | Uses the returned assessment for the consequence component according to the scoring rules. |
+| **JEV unavailable or not configured** | Uses the applicable provisional behavior, with the result identified as provisional. |
+| **JEV confidence below the configured threshold** | Flags the assessment for human review rather than automatically reducing its score. |
+| **Required scheduling information missing** | Surfaces the limitation instead of inventing missing schedule values. |
+| **Resource or dependency information incomplete** | Reports relevant capture warnings or limitations where detected. |
+| **Microsoft Project schedule updated after capture** | Requires a fresh read before analyzing the updated schedule. |
 
-## MSP Integration
+The Microsoft Project integration is read-only. For JEV assessment, only the activity name and notes are sent as inputs; dates, slack values, and resource assignments are not part of that JEV payload.
 
-- **The product's MSP integration is strictly read-only**: no
-  Save/SaveAs/FileSave, no MSP task/resource/schedule mutation — verified
-  by tests and validated live against a real Microsoft Project (including
-  an end-to-end Streamlit run).
-- This is a product-path guarantee, not a claim that the repository
-  contains no write operations: the legacy Decision-problems UI writes
-  local JSON under `data/decision_problems/`, and
-  `scripts/msp_fixture_author.py` is a deliberately write-capable test
-  tool that refuses to run without `--i-understand`.
-- Requires **Windows**, an **installed Microsoft Project** with a
-  project open, and `pywin32` (COM).
-- Loads the **active project** through
-  `MspComClient → MspProjectAdapter → mapper → ProjectState`.
-- Rows Microsoft Project marks as summary/inactive are not mapped; links
-  or assignments that point at those rows (or at unmapped resources) are
-  omitted from the snapshot and reported as **capture warnings** in the
-  Project panel. Nothing is invented to fill the gap.
-- Load failures (no active project, COM unavailable) become structured
-  WHAT/WHY/NEXT messages — never stack traces, never fabricated data.
-- `scripts/msp_field_dump.py` prints a comparison-friendly field report
-  of the open project (read-only).
+---
 
-## JEV Integration
+## ⚡ Quick Start
 
-JEV (TypeSafe's System One) evaluates the **consequence of delay** of a
-candidate activity from its qualitative context:
+### 1. Prerequisites
 
-- the request contains **only task name and notes** — no slack,
-  criticality, successors, dates, resources, or scores ever leave the
-  process (tested);
-- the answer's level score is normalized by the application:
-  `CD = score / 3`;
-- confidence is preserved and displayed; below 0.5 it flags review
-  without touching the score;
-- OFFLINE mode (default) is fully usable with no JEV at all.
+- **Operating system:** Windows for live Microsoft Project COM integration.
+- **Python:** Python 3.12 or newer as the documented baseline.
+- **Microsoft Project:** Installed locally, with the target project open, for live schedule integration.
+- **TypeSafe JEV credentials:** Optional, for live consequence assessments.
 
-**Live-service status (honest):** the configured TypeSafe service was
-unreachable from the validation environment due to **HTTP 451 regional
-availability restriction** (recorded twice, with a real key configured;
-the structured error path was observed live). The complete JEV
-semantics are verified hermetically with fakes. `pytest -m jev` exists
-for an environment where the service is reachable.
+### 2. Installation (Windows PowerShell)
 
-To configure: `TYPESAFE_API_KEY=...` in the environment or `.env`
-(never committed, never printed, repr-masked; see `.env.example`).
-
-## Demo vs Live
-
-| Capability | Demo | Live MSP |
-| --- | --- | --- |
-| Project source | in-repo deterministic fixture | active MSP project (read-only) |
-| Microsoft Project required | no | **Windows + MSP + pywin32** |
-| Network required | no | no |
-| JEV / API key | no (provisional CD) | OFFLINE: no · LIVE: yes |
-| Deterministic outputs | yes (fixed fixture) | yes (per snapshot) |
-| Streamlit AppTest-verifiable | yes | via `msp` markers |
-
-## Installation
-
-```bash
-git clone <this repository>
+```powershell
+# 1. Clone the repository
+git clone [https://github.com/mhmdrza-mp4/project.git](https://github.com/mhmdrza-mp4/project.git)
 cd project
-python -m venv .venv && .venv\Scripts\activate      # Windows
-pip install -e .                                      # installs streamlit, plotly, typesafe-sdk
-# optional for live MSP:  pip install pywin32
-streamlit run app/streamlit_app.py                    # → Load Demo Project
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 3. Install ProjectPilot
+pip install -e .
+
+# 4. Launch the terminal dashboard
+pda
 ```
 
-Python 3.12+ (developed on 3.14). `pip install -e .[msp]` adds pywin32
-for the live MSP loader.
+Alternatively, launch the interface with:
 
-## Testing
-
-```bash
-python -m pytest            # hermetic suite: no MSP, no JEV, no network, no key
-pytest -m msp               # live MSP integration (auto-skips without an open project)
-pytest -m jev               # live JEV call (auto-skips without TYPESAFE_API_KEY)
+```powershell
+python -m project_decision.tui
 ```
 
-> **Write-capable test tool:** `scripts/msp_fixture_author.py` is the only
-> repository script that adds tasks/resources to Microsoft Project. It is
-> never used by the product or the tests, does not save/close/quit MSP,
-> and exits before any COM access unless run with `--i-understand`.
-> Do not run it against a real project.
+If PowerShell blocks virtual-environment activation, temporarily allow it for the current terminal session:
 
-Verified state of this repository (Windows, Python 3.14):
-
-- **Normal suite: 569 passed, 20 deselected** (all hermetic).
-- **msp suite: 19 passed** against a real Microsoft Project session —
-  loader chain, field semantics, conflict analysis, dependency
-  direction, capture behavior, plus a real end-to-end Streamlit run.
-- **jev suite:** not executable here (HTTP 451 region block, documented
-  above).
-
-The suite is hermetic by design: `pytest addopts` deselects the
-live-integration markers; nothing in the normal run touches MSP, COM,
-the network, or a key.
-
-## Repository Structure
-
-```
-app/                                product Streamlit UI (thin consumer)
-src/project_decision/
-    domain/                         pure models (ProjectState = snapshot)
-    application/                    workflow, pipeline, analysis, scoring,
-    ranking, review; demo/ fixture; config
-    infrastructure/msp/             read-only COM integration
-    infrastructure/jev/             TypeSafe SDK client
-    presentation/                   early dashboard (legacy; MSP read-only,
-                                    local JSON decision-problem storage)
-tests/                              hermetic suite + fakes + live markers
-scripts/                            msp_field_dump.py (read-only report),
-    manual_msp_read.py,
-    msp_fixture_author.py (WRITE-CAPABLE; requires --i-understand),
-    generate_sample_msp.py (WRITE-CAPABLE; requires --i-understand,
-    only touches its own fresh sample project)
-examples/production-line-commissioning/
-    Production_Line_Commissioning.mpp (bundled sample project),
-    README.md (user guide), scenario-data.json (JEV scenario),
-    expected-results.md (verified outcomes)
-docs/                               architecture, decision model, demo guide,
-    historical design records
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
 ```
 
-## Limitations
+### 3. Connect to Microsoft Project
 
-- No production deployment story (no Docker, no auth, no database);
-  this is a local desktop-style tool.
-- MSP integration: Windows-only COM, active project only, read-only for
-  Microsoft Project (local JSON authoring and the opt-in fixture tool are
-  separate write surfaces, not MSP write-back).
-- MSP mapping omits references to skipped summary/inactive rows and to
-  unmapped resources; the Project panel reports the omitted counts as
-  capture warnings. No relationship is invented to fill the gap.
-- Resource conflicts are warning-level; no capacity modeling or
-  levelling.
-- Live JEV region-blocked in the validation environment; live behavior
-  beyond the observed 451 error path is not claimed.
-- The prioritization index is decision-support only — accuracy claims
-  beyond the documented formulas are explicitly not made.
+1. Open the target `.mpp` file in Microsoft Project.
+2. Make sure the intended project is active.
+3. Launch ProjectPilot.
+4. Read the active schedule.
+5. Select and review a planning period.
+6. Confirm the candidate activities and run the analysis.
+7. Inspect the ranked activities, score breakdowns, and review flags.
 
-## Roadmap
+### 4. Optional: Configure TypeSafe JEV
 
-Genuinely planned:
+Configure the credentials required by the installed TypeSafe integration.
 
-- JEV live-mode verification once the service is reachable from a
-  supported region (the graded live test is already in place).
-- Optional JSON persistence of captured `ProjectState` snapshots for
-  later what-if replay.
-- Multi-scenario weight presets and saved views (UI-side only).
+If the repository's `.env.example` specifies `TYPESAFE_API_KEY`, create a local `.env` file in the repository root:
 
-Not planned: automatic scheduling or decision execution, MSP
-write-back, ML/AI scoring, resource optimisation.
+```ini
+TYPESAFE_API_KEY=your-key-here
+```
+
+Keep credentials private and never commit real API keys to version control. Live JEV behavior depends on the service being configured, reachable, and returning a usable assessment.
+
+---
+
+## 🏭 Industrial Sample Project
+
+ProjectPilot includes a sample Microsoft Project schedule representing the **commissioning of a production line**:
+
+```text
+examples/
+└── production-line-commissioning/
+    ├── Production_Line_Commissioning.mpp
+    ├── README.md
+    ├── scenario-data.json
+    └── expected-results.md
+```
+
+The sample schedule contains:
+
+- **12 phases**
+- **120 leaf activities**
+- **10 resources**
+- Activity dependencies, scheduling information, and resource assignments for testing the analysis workflow.
+
+### How to Run the Sample
+
+1. Open `Production_Line_Commissioning.mpp` in Microsoft Project.
+2. Make sure it is the active project.
+3. Launch ProjectPilot and read the active schedule.
+4. Select a planning period appropriate to the sample schedule.
+5. Review and confirm the proposed candidate activities.
+6. Run the decision analysis and inspect the results.
+
+The output depends on the selected planning period, captured schedule data, scoring inputs, and availability of the optional JEV integration.
+
+<p>
+  <a href="examples/production-line-commissioning/README.md"><img src="https://img.shields.io/badge/📘_Sample_Project_Guide-1E293B?style=for-the-badge" alt="Sample Project Guide"></a>
+  <a href="examples/production-line-commissioning/expected-results.md"><img src="https://img.shields.io/badge/📊_Expected_Results-1E293B?style=for-the-badge" alt="Expected Results"></a>
+</p>
+
+---
+
+## 📂 Repository Layout
+
+```text
+project/
+├── docs/
+│   └── assets/
+│       ├── workflow.svg
+│       ├── dashboard-1.png
+│       └── dashboard-2.png
+├── examples/
+│   └── production-line-commissioning/
+│       ├── Production_Line_Commissioning.mpp
+│       ├── README.md
+│       ├── scenario-data.json
+│       └── expected-results.md
+├── src/
+│   └── project_decision/
+│       └── tui/
+│           ├── app.py
+│           ├── data.py
+│           ├── widgets.py
+│           └── __main__.py
+├── tests/
+├── .env.example
+├── LICENSE
+├── pyproject.toml
+└── README.md
+```
+
+This layout highlights the main user-facing files. Other application, domain, integration, and test modules are omitted for readability.
+
+---
+
+## 🧭 Operational Boundaries
+
+- **Human-in-the-loop:** ProjectPilot provides decision support; the project manager remains responsible for the final decision.
+- **Read-only integration:** The application reads the active Microsoft Project schedule and does not write schedule changes back to the project.
+- **No automatic scheduling:** It does not automatically reschedule activities, optimize the schedule, or perform resource leveling.
+- **Conflict detection is not resource planning:** Resource-overlap signals help identify potential issues; they do not establish a complete resource-capacity plan.
+- **Snapshot-based analysis:** Changes made in Microsoft Project after capture require a fresh read before the updated schedule is analyzed.
+- **Optional JEV integration:** Consequence assessments depend on service configuration, availability, and usable assessment results.
+- **Transparent uncertainty:** Provisional results and missing inputs should be reviewed rather than interpreted as certain conclusions.
+
+---
+
+## 📄 License
+
+Distributed under the **MIT License**.
+
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/📜_View_Full_MIT_License-1E293B?style=flat-square" alt="View License"></a>
+</p>
+
+---
+
+<div align="center">
+
+  <strong>ProjectPilot</strong>
+
+  <p><em>See the priorities. Understand the reasons. Make the decision.</em></p>
+
+  <p>
+    <a href="#readme-top"><img src="https://img.shields.io/badge/⬆️_Back_to_Top-1E293B?style=for-the-badge" alt="Back to Top"></a>
+  </p>
+
+</div>

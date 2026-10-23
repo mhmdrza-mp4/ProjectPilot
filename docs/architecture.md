@@ -6,8 +6,8 @@ actually does today — nothing planned, nothing aspirational.
 
 ```
         ┌──────────────────────────────────────────────────────┐
-        │  Streamlit UI (app/)              thin consumer      │
-        │  widgets, formatting, charts, session state only    │
+        │  Terminal UI (tui/, Textual + Rich)  thin consumer   │
+        │  widgets, formatting, workers, key bindings only     │
         └──────────────────────────┬───────────────────────────┘
                                    ↓ (workflow functions only)
         ┌──────────────────────────────────────────────────────┐
@@ -19,7 +19,7 @@ actually does today — nothing planned, nothing aspirational.
         │ DecisionPipeline      │   │ loaders / evaluators        │
         │ schedule → conflicts  │   │ MSP read-only COM adapter   │
         │ → consequence → score │   │ JEV consequence evaluation  │
-        │ → ranking → review    │   │ Demo Mode fixture           │
+        │ → ranking → review    │   │                             │
         └──────────┬────────────┘   └────────────────────────────┘
                    ↓
         ┌──────────────────────────────────────────────────────┐
@@ -36,7 +36,7 @@ actually does today — nothing planned, nothing aspirational.
 `Project`, `Task`, `Resource`, `Milestone`, `Constraint`,
 `PlanningPeriod`, `PlanningSession`, `ProjectState` (the snapshot
 concept), `Decision`/`DecisionEvaluation`/`DecisionRecommendation`,
-task status. Standard library only; no MSP, JEV, or Streamlit imports;
+task status. Standard library only; no MSP, JEV, or Textual imports;
 invariants enforced in `__post_init__`.
 
 ### `application/` — use cases, no I/O
@@ -58,8 +58,8 @@ invariants enforced in `__post_init__`.
 - `decision_pipeline.py` — orchestrates the stages in exactly one
   pass each; result objects are immutable data.
 
-Also in the package: `demo/` — the offline Demo Mode fixture (data
-only, built from domain models), and `config.py` — the minimal
+Also in the package: `tui/` — the terminal presentation layer (see
+below), and `config.py` — the minimal
 `.env`/`TYPESAFE_API_KEY` reader (key never logged or exposed).
 
 ### `infrastructure/` — technology adapters
@@ -74,30 +74,25 @@ only, built from domain models), and `config.py` — the minimal
   request, typed answers, structured errors; a missing key is a
   configuration state, not a crash.
 
-### `presentation/` — the legacy dashboard
+### `tui/` — the product UI (thin, deliberately)
 
-Kept as a historical viewer for the active project and the JEV dev test
-panel; the product flow lives in `app/` (Streamlit). Its MSP view is
-read-only, but its **Decision problems** tab creates/updates/deletes
-local JSON records under `data/decision_problems/` — local application
-persistence, not a Microsoft Project write.
+The Textual + Rich terminal dashboard (plus the `tui/data.py` bridge
+that is the ONLY layer touching the application functions). Iron rules:
 
-### `app/` — the product UI (thin, deliberately)
-
-Widgets, formatting, charts, helpers that only *display* what the
-application layer produced, and Streamlit session state. Iron rules,
-enforced by AST tests (`tests/test_ui_app.py`):
-
-- imports `streamlit`, `plotly`, a stdlib handful, domain models, and
-  an enumerated allow-list of application modules — nothing else;
-- **never** imports or calls pipeline functions
+- imports Textual/Rich, domain models, and an enumerated bridge of
+  workflow/loader/evaluator functions — nothing else;
+- **never** imports or calls pipeline internals directly
   (`run_decision_pipeline`, `score_session_with_evaluations`,
   `create_decision_result`, `review_decision_result`,
-  `validate_decision_result`, `analyze_schedule`,
-  `analyze_resource_conflicts`) or any MSP/SDK library;
-- contains **no business rules**: results live in session state, and
-  a stale result (changed session or parameters) is cleared with a
-  message, never displayed with mismatched context.
+  `analyze_schedule`, `analyze_resource_conflicts`) or any MSP/SDK
+  library; COM runs inside `@work(thread=True)` workers around the
+  existing loader;
+- contains **no business rules**: every displayed number comes from an
+  immutable result object; a stale result (changed session) is refused
+  and never displayed with mismatched context;
+- the connection status is real: CONNECTED only after an actual read;
+  failures surface as structured WHAT/WHY/NEXT text, and the JEV mode
+  toggle stays OFFLINE unless a key actually resolves.
 
 ## Why `DecisionWorkflow` exists
 
@@ -109,12 +104,11 @@ models. Consequences:
 - no hidden mutation: a prior result references its own snapshot and
   cannot be silently invalidated; instead the workflow *knows* staleness
   (`result_is_stale` compares sessions), and the UI surfaces it;
-- UI cannot reach around the workflow: the layering test forbids direct
-  pipeline calls, so all decisions flow through the same seam;
+- the terminal UI cannot reach around the workflow: every display
+  action goes through the same seam;
 - injectable everything: the loader and the evaluator are plain
-  callables, which is why the same workflow runs against live MSP COM,
-  a fake in tests, or the Demo Mode fixture — one product, three
-  sources, zero special cases.
+  callables, which is why the same workflow runs against live MSP COM
+  or a fake in tests — one product, no special cases.
 
 ## Why the pipeline is a separate object
 
@@ -139,23 +133,21 @@ required" instead of guessing.
   notes — slack, criticality, successors, dates, resources, and scores
   never leave the process. Live failures become structured
   per-task states (`failed` / `unavailable`), never crashes.
-- **Demo Mode** (`project_decision.demo`): the third loader — a fixed
-  in-repo snapshot through the *same* boundary, so the product is fully
-  explorable offline with the identical workflow and pipeline.
 
 **Read-only scope.** The no-write guarantee applies to the product's
-Microsoft Project integration. The repository is not write-free: the
-legacy Decision-problems UI writes local JSON under `data/`, and
-`scripts/msp_fixture_author.py` is a deliberately write-capable test tool
-that refuses to run without its explicit `--i-understand` opt-in. Neither
-is used by the product flow; local JSON persistence is application data,
-never a Microsoft Project write.
+Microsoft Project integration, including the terminal UI. The
+repository is not write-free: `scripts/msp_fixture_author.py` is a
+deliberately write-capable test tool
+that refuses to run without its explicit `--i-understand` opt-in. It
+is not used by the product flow.
 
 ## Testing posture
 
-550+ hermetic tests (domain/application/UI/AppTest) run on any platform
+520+ hermetic tests (domain/application + Textual `run_test` UI tests)
+run on any platform
 without MSP, JEV, network, or keys; `pytest -m msp` / `pytest -m jev`
 opt-in integration suites exist for machines that have those
 integrations, and skip themselves automatically otherwise. The MSP path
 was additionally validated against a real Microsoft Project (read-only)
-in a dedicated validation pass, including a live Streamlit run.
+in a dedicated validation pass, including live runs of the terminal UI
+on the bundled sample project.

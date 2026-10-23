@@ -92,84 +92,52 @@ class TimelineChart(Static):
     remaining span (Version 2 accent order).
     """
 
-    TRACK_WIDTH = 56
+    TRACK_WIDTH = 40
 
     def render_schedule(
         self,
-        labels: Sequence[str],
-        starts: Sequence[date | None],
-        finishes: Sequence[date | None],
-        window_start: date,
-        window_end: date,
+        labels,
+        starts,
+        finishes,
+        window_start,
+        window_end,
         *,
-        completed: Sequence[bool] | None = None,
-        progress: Sequence[float] | None = None,
-        today: date | None = None,
-        title: str = "TIMELINE",
+        completed=None,
+        progress=None,
+        today=None,
+        title="TIMELINE",
     ) -> None:
         total_days = max(1, (window_end - window_start).days)
-        usable = self.TRACK_WIDTH - 4
-        scale = usable / total_days
-        lines: list[Text] = []
-
+        lines = []
         header = Text()
-        header.append(f" {title} ", style=f"bold {ACCENT}")
-        header.append(
-            f"  {window_start.isoformat()} → {window_end.isoformat()}"
-            f"   ({total_days + 1} days)",
-            style=DIM,
-        )
+        header.append(" " + title, style="bold " + ACCENT)
+        header.append("  " + window_start.isoformat() + " -> " + window_end.isoformat(), style=DIM)
         lines.append(header)
-
         for index, label in enumerate(labels):
             start = starts[index] if index < len(starts) else None
             finish = finishes[index] if index < len(finishes) else None
             line = Text()
-            line.append(f" {label[:30]:<30}", style=TEXT)
+            line.append(" " + str(label)[:34].ljust(34), style=TEXT)
             if start is None or finish is None:
-                line.append("— undated: schedule unknown", style=DIM)
+                line.append("  undated", style=DIM)
                 lines.append(line)
                 continue
-            is_done = bool(completed[index]) if completed is not None else False
-            fraction = (
-                float(progress[index])
-                if progress is not None and index < len(progress)
-                else 0.0
-            )
-            left = max(0, round((start - window_start).days * scale))
-            right = max(
-                left,
-                min(usable, round((finish - window_start).days * scale) + 1),
-            )
-            done_until = left + max(0, round((right - left) * fraction))
-            if is_done:
-                line.append("█" * max(1, right - left), style=BLUE)
-            else:
-                line.append(" " * left)
-                count = max(0, min(done_until, usable) - left)
-                if count:
-                    line.append("█" * count, style=BLUE)
-                tail = max(1, right - max(left, done_until))
-                line.append("█" * tail, style=ACCENT)
+            pct = 0.0
+            if progress is not None and index < len(progress) and progress[index] is not None:
+                pct = float(progress[index])
+            is_done = bool(completed[index]) if completed is not None and index < len(completed) else False
+            bar_width = 12
+            filled = max(0, min(bar_width, round(pct * bar_width)))
+            status = "done" if is_done else (str(round(pct * 100)) + "%")
+            line.append("  " + start.isoformat() + "->" + finish.isoformat() + "  ", style=DIM)
+            line.append("#" * filled, style=ACCENT)
+            line.append("." * (bar_width - filled), style="#22303f")
+            line.append(" " + status, style=DIM)
             lines.append(line)
-
-        axis = Text(" " * 32)
         if today is not None and window_start <= today <= window_end:
-            marker = round((today - window_start).days * scale) + 1
-            axis.append("▲" if marker >= 0 else "", style=WARN)
-        lines.append(axis)
-        lines.append(Text(" " * 31 + "┌" + "─" * usable, style=BORDER))
-
-        legend = Text(" legend: ")
-        legend.append("█", style=BLUE)
-        legend.append(" completed-to-date    ", style=DIM)
-        legend.append("█", style=ACCENT)
-        legend.append(" remaining    ", style=DIM)
-        legend.append("▲ capture date", style=DIM)
-        lines.append(legend)
-
-        # append the styled Text objects WHOLESALE: joining with str()
-        # would strip every color (which once made all monochrome).
+            marker = Text()
+            marker.append(" today " + today.isoformat(), style=WARN)
+            lines.append(marker)
         out = Text()
         for line in lines:
             out.append(line)

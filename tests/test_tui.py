@@ -189,7 +189,7 @@ class TestTerminalDashboard:
             # every advertised action is a REAL binding
             bound = {b.key for b in DecisionTUI.BINDINGS}
             assert {
-                "l", "p", "c", "a", "j", "r", "t", "s",
+                "l", "p", "c", "a", "j", "r", "t",
                 "question_mark", "q",
             } <= bound
 

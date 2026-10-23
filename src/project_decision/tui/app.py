@@ -38,7 +38,6 @@ Keyboard (stable; footer and [?] help mirror it exactly):
       TYPESAFE_API_KEY is actually configured)
     R re-capture the project snapshot
     T toggle the timeline panel
-    S sample-project guide (the bundled real .mpp workflow)
     ? context help (all keys and states, same list as here)
     ↑/↓ select activities (also Enter) — the queue drives the inspector
     Q quit
@@ -111,7 +110,6 @@ class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
     def compose(self) -> ComposeResult:
         with Container(id="period_dialog"):
             yield Label("▸  PLANNING PERIOD", id="period_title")
-            yield Label("Which activities need attention? The period is inclusive.", id="period_hint")
             yield Label("START DATE (YYYY-MM-DD)", classes="field-label")
             yield Input(
                 value=self._start_iso or "",
@@ -126,8 +124,7 @@ class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
             )
             yield Label("", id="period_error")
             yield Label(
-                "[ENTER] apply · [ESC] cancel — the candidates come from "
-                "the real schedule; nothing is guessed",
+                "[ENTER] apply · [ESC] cancel",
                 markup=False,
                 id="period_footer",
             )
@@ -136,12 +133,15 @@ class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
         self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """ENTER inside a date field applies the period.
+        """ENTER inside a date field.
 
-        Input widgets consume the Enter key themselves (they emit their
-        own Submitted event), so the screen binding alone would never
-        fire while a field is focused — this is the REAL Enter path.
+        Pressing Enter in the START field moves focus to the END field
+        instead of submitting the whole period. Pressing Enter in the END
+        field (or elsewhere) applies the period.
         """
+        if event.input.id == "period_start":
+            self.query_one("#period_end", Input).focus()
+            return
         self.action_apply()
 
     def action_apply(self) -> None:
@@ -181,7 +181,6 @@ class HelpScreen(ModalScreen[None]):
         ("[A]", "Run the decision analysis (offline provisional or LIVE JEV)"),
         ("[J]", "Switch JEV mode; refuses loudly when no API key is configured"),
         ("[T]", "Show / hide the timeline panel"),
-        ("[S]", "Sample-project guide in the queue panel (real bundled .mpp)"),
         ("[?]", "This help"),
         ("↑/↓, Enter", "Select an activity in the priority queue"),
         ("[Q]", "Quit"),
@@ -216,29 +215,29 @@ class DecisionTUI(App[None]):
     """The PROJECT DECISION terminal dashboard (Version 2 design)."""
 
     CSS = """
-    $navy: #10141b;
-    $panel: #151b24;
-    $card: #19212c;
-    $border: #303b4a;
-    $accent: #55d6be;
-    $blue: #8ab4ff;
-    $warn: #ffbd69;
-    $invalid: #ff8294;
-    $text: #e7edf5;
-    $dim: #a8b6c9;
-    $faint: #718198;
+    $navy: $background;
+    $panel: $surface;
+    $card: $surface;
+    $border: $boost;
+    $accent: $primary;
+    $blue: $secondary;
+    $warn: $warning;
+    $invalid: $error;
+    $text: $foreground;
+    $dim: $text-muted;
+    $faint: $text-muted;
 
     Screen {
         background: $navy;
         color: $text;
     }
     Header {
-        background: #171e28;
+        background: $surface;
         color: $dim;
         height: 3;
     }
     Footer {
-        background: #171e28;
+        background: $surface;
         color: $dim;
     }
     #page {
@@ -333,7 +332,7 @@ class DecisionTUI(App[None]):
         border: none;
     }
     DataTable > .datatable--header {
-        background: #202a37;
+        background: $boost;
         color: $text;
         text-style: bold;
     }
@@ -415,13 +414,36 @@ class DecisionTUI(App[None]):
         Binding("a", "analyze", "Analyze", show=True, key_display="A"),
         Binding("j", "toggle_jev", "JEV mode", show=True, key_display="J"),
         Binding("r", "reload", "Re-capture", show=True, key_display="R"),
-        Binding("s", "sample_guide", "Sample", show=True, key_display="S"),
         Binding("t", "toggle_timeline", "Timeline", show=True, key_display="T"),
         Binding(
             "question_mark", "help", "Help", show=True, key_display="?"
         ),
         Binding("q", "quit", "Quit", show=True, key_display="Q"),
     ]
+
+    # Keep the theme picker (Ctrl+P → "Switch theme") to a manageable
+    # set and make the whole dashboard follow the chosen theme.
+    _THEME_ALLOWLIST = {
+        "textual-dark",
+        "textual-light",
+        "nord",
+        "dracula",
+        "tokyo-night",
+        "gruvbox",
+        "catppuccin-mocha",
+        "monokai",
+        "rose-pine",
+        "solarized-dark",
+    }
+
+    @property
+    def available_themes(self):
+        themes = super().available_themes
+        return {
+            name: theme
+            for name, theme in themes.items()
+            if name in self._THEME_ALLOWLIST
+        }
 
     def __init__(self) -> None:
         super().__init__()
@@ -519,8 +541,7 @@ class DecisionTUI(App[None]):
         self._metric("m_flags", "RESOURCE FLAGS", "—", "conflicts load with [L]")
         self.query_one("#timeline", TimelineChart).update(
             Text(
-                " TIMELINE — no project loaded yet; press [L] to load the "
-                "active plan (or [S] for the sample guide)",
+                " TIMELINE — no project loaded yet; press [L] to load the active plan",
                 style=DIM,
             )
         )
@@ -819,13 +840,6 @@ class DecisionTUI(App[None]):
         self._refresh_queue_state()
         self._bottom_note(None)
         self.notify("Microsoft Project could not be read (see queue panel).", severity="error")
-
-    # -- [S] sample guide ----------------------------------------------------------
-
-    def action_sample_guide(self) -> None:
-        self._panel_message = bridge.sample_project_guide_text()
-        self._refresh_queue_state()
-        self.notify("Sample-project guide shown in the queue panel.", markup=False)
 
     # -- [P] period -------------------------------------------------------------------
 
@@ -1365,16 +1379,11 @@ class DecisionTUI(App[None]):
 
         notes = Text()
         task_notes = (task.notes if task is not None else None) or None
-        notes.append(" NOTES   ", style=FAINT)
         if task_notes:
             label = task_notes.strip()
-            notes.append(
-                (label[:170] + "…") if len(label) > 170 else label, style=FAINT
-            )
+            notes.append((label[:120] + "…") if len(label) > 120 else label, style=FAINT)
         else:
-            notes.append(
-                "none — LIVE JEV evaluates consequences from name + notes", style=FAINT
-            )
+            notes.append("none", style=FAINT)
         self.query_one("#insp_notes", Static).update(notes)
 
         # contextual next action (never invented data — only guidance)

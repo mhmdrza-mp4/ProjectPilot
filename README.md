@@ -178,15 +178,16 @@ The Microsoft Project integration is read-only. For JEV assessment, only the act
 
 ```powershell
 # 1. Clone the repository
-git clone [https://github.com/mhmdrza-mp4/project.git](https://github.com/mhmdrza-mp4/project.git)
-cd project
+git clone https://github.com/mhmdrza-mp4/ProjectPilot.git
+cd ProjectPilot
 
 # 2. Create and activate a virtual environment
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # 3. Install ProjectPilot
-pip install -e .
+# On Windows, add the [msp] extra for live Microsoft Project integration:
+pip install -e .[msp]
 
 # 4. Launch the terminal dashboard
 pda
@@ -271,6 +272,10 @@ The output depends on the selected planning period, captured schedule data, scor
 ```text
 project/
 ├── docs/
+│   ├── 01 - Product Definition.md
+│   ├── 02 - Architecture.md
+│   ├── architecture.md
+│   ├── decision-model.md
 │   └── assets/
 │       ├── workflow.svg
 │       ├── dashboard-1.png
@@ -281,13 +286,19 @@ project/
 │       ├── README.md
 │       ├── scenario-data.json
 │       └── expected-results.md
+├── scripts/
+│   ├── generate_sample_msp.py
+│   ├── manual_msp_read.py
+│   ├── msp_field_dump.py
+│   └── msp_fixture_author.py
 ├── src/
 │   └── project_decision/
-│       └── tui/
-│           ├── app.py
-│           ├── data.py
-│           ├── widgets.py
-│           └── __main__.py
+│       ├── application/
+│       ├── domain/
+│       ├── infrastructure/
+│       ├── tui/
+│       ├── config.py
+│       └── __init__.py
 ├── tests/
 ├── .env.example
 ├── LICENSE
@@ -295,7 +306,7 @@ project/
 └── README.md
 ```
 
-This layout highlights the main user-facing files. Other application, domain, integration, and test modules are omitted for readability.
+This layout shows the repository's main directories and files. Test, cache, and virtual-environment directories are omitted.
 
 ---
 

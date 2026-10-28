@@ -11,44 +11,46 @@ data" bar/label, never as zero.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Sequence
-
 from rich.text import Text
 from textual.widgets import Static
 
-# -- design tokens (shared with app.css via CSS literals) -----------------------
-ACCENT = "#55d6be"       # teal (primary accent, reference token)
-BLUE = "#8ab4ff"         # informational accent (resource flags)
-WARN = "#ffbd69"         # warning / provisional
-ERROR = "#ff8294"        # error / bad
-GOOD = "#55d6be"         # positive = the primary accent
-TEXT = "#e7edf5"         # primary text
-DIM = "#a8b6c9"          # secondary text
-FAINT = "#718198"        # tertiary text
-NAVY = "#10141b"         # screen background (reference)
-PANEL = "#151b24"        # panel background
-CARD = "#19212c"         # card background
-BORDER = "#303b4a"       # rounded border color
-HEADER_BG = "#171e28"    # header/footer background
+# -- design tokens (shared with app.py via CSS literals) -----------------------
+ACCENT = "#55d6be"  # teal (primary accent, reference token)
+BLUE = "#8ab4ff"  # informational accent (resource flags)
+WARN = "#ffbd69"  # warning / provisional
+ERROR = "#ff8294"  # error / bad / critical
+GOOD = "#55d6be"  # positive = the primary accent
+TEXT = "#e7edf5"  # primary text
+DIM = "#a8b6c9"  # secondary text
+FAINT = "#64748b"  # tertiary text
+NAVY = "#0d1117"  # deep screen background
+PANEL = "#131922"  # panel background
+CARD = "#18202c"  # card background
+BORDER = "#2a3546"  # rounded border color
+HEADER_BG = "#161d27"  # header/footer background
+BAR_BG = "#222d3d"  # empty bar track
 
-BAR_WIDTH = 18
+BAR_WIDTH = 16
 
 
 class StatCard(Static):
     """One reference-style metric tile: LABEL / big value / note."""
 
-    def set_metric(self, title: str, value: str, detail: str = "") -> None:
+    def set_metric(
+        self,
+        title: str,
+        value: str,
+        detail: str = "",
+        color: str = ACCENT,
+    ) -> None:
         text = Text()
-        text.append(f" {title}", style=f"bold {DIM}")
-        text.append("\n ")
-        if value:
-            text.append(value, style=f"bold {ACCENT}")
+        text.append(f"▸ {title}\n", style=f"bold {FAINT}")
+        if value and value != "—":
+            text.append(f"  {value}", style=f"bold {color}")
         else:
-            text.append("—", style=FAINT)
+            text.append("  —", style=f"bold {FAINT}")
         if detail:
-            text.append("\n ")
-            text.append(detail, style=DIM)
+            text.append(f"\n  {detail}", style=DIM)
         self.update(text)
 
 
@@ -66,33 +68,37 @@ class ScoreBarRow(Static):
             self.update(
                 Text.assemble(
                     (f" {label:<4}", f"bold {FAINT}"),
-                    ("░" * BAR_WIDTH, "#22303f"),
-                    ("  no data — flagged for review", WARN),
+                    ("━" * BAR_WIDTH, BAR_BG),
+                    ("  no data — flagged", f"italic {WARN}"),
                 )
             )
             return
+
+        bar_color = color
+        if label == "SP" and value >= 0.67:
+            bar_color = ERROR
+        elif label == "SI" and value >= 0.67:
+            bar_color = BLUE
+        elif label == "CD":
+            bar_color = WARN if value == 0.5 else GOOD
+
         text = Text()
-        text.append(f" {label:<4}", style=f"bold {color}")
+        text.append(f" {label:<4}", style=f"bold {TEXT}")
         filled = max(0, min(BAR_WIDTH, round(value * BAR_WIDTH)))
-        text.append("█" * filled, style=color)
-        text.append("░" * (BAR_WIDTH - filled), style="#22303f")
+        text.append("█" * filled, style=bar_color)
+        text.append("░" * (BAR_WIDTH - filled), style=BAR_BG)
         contribution_text = (
-            "+0.0 pts" if contribution is None else f"+{contribution:.1f} pts"
+            "+0.0 pts" if contribution is None else f"+{contribution:>4.1f} pts"
         )
-        text.append(f"  {value:.3f} {contribution_text}", style=DIM)
+        text.append(f"  {value:.3f} ", style=TEXT)
+        text.append(f"({contribution_text})", style=DIM)
         self.update(text)
 
 
 class TimelineChart(Static):
-    """A compact textual Gantt strip over the planning period.
+    """A compact textual Gantt strip over the planning period."""
 
-    Renders the schedule the project ACTUALLY reports (real start /
-    finish dates only; undated tasks are skipped, never invented). A
-    blue segment shows work completed up to the capture date, teal the
-    remaining span (Version 2 accent order).
-    """
-
-    TRACK_WIDTH = 40
+    TRACK_WIDTH = 28
 
     def render_schedule(
         self,
@@ -109,37 +115,74 @@ class TimelineChart(Static):
     ) -> None:
         total_days = max(1, (window_end - window_start).days)
         lines = []
+
         header = Text()
-        header.append(" " + title, style="bold " + ACCENT)
-        header.append("  " + window_start.isoformat() + " -> " + window_end.isoformat(), style=DIM)
+        header.append(f" ▸ {title} ", style=f"bold {ACCENT}")
+        header.append(
+            f" ({window_start.isoformat()} → {window_end.isoformat()})",
+            style=DIM,
+        )
+        if today is not None and window_start <= today <= window_end:
+            header.append(f"   ● today: {today.isoformat()}", style=f"bold {WARN}")
         lines.append(header)
+
         for index, label in enumerate(labels):
             start = starts[index] if index < len(starts) else None
             finish = finishes[index] if index < len(finishes) else None
             line = Text()
-            line.append(" " + str(label)[:34].ljust(34), style=TEXT)
+            clean_label = str(label)[:32].ljust(32)
+            line.append(f"   {clean_label} ", style=TEXT)
+
             if start is None or finish is None:
-                line.append("  undated", style=DIM)
+                line.append("  ── undated ──", style=FAINT)
                 lines.append(line)
                 continue
+
             pct = 0.0
-            if progress is not None and index < len(progress) and progress[index] is not None:
-                pct = float(progress[index])
-            is_done = bool(completed[index]) if completed is not None and index < len(completed) else False
-            bar_width = 12
-            filled = max(0, min(bar_width, round(pct * bar_width)))
-            status = "done" if is_done else (str(round(pct * 100)) + "%")
-            line.append("  " + start.isoformat() + "->" + finish.isoformat() + "  ", style=DIM)
-            line.append("#" * filled, style=ACCENT)
-            line.append("." * (bar_width - filled), style="#22303f")
-            line.append(" " + status, style=DIM)
+            if (
+                progress is not None
+                and index < len(progress)
+                and progress[index] is not None
+            ):
+                pct = max(0.0, min(1.0, float(progress[index])))
+            is_done = (
+                bool(completed[index])
+                if completed is not None and index < len(completed)
+                else (pct >= 1.0)
+            )
+
+            date_str = f"{start.strftime('%m-%d')}→{finish.strftime('%m-%d')}"
+            line.append(f" {date_str}  ", style=FAINT)
+
+            # Calculate Gantt bar position within window
+            s_offset = max(0, min(total_days, (start - window_start).days))
+            f_offset = max(
+                s_offset + 1, min(total_days, (finish - window_start).days + 1)
+            )
+
+            bar_start = int((s_offset / total_days) * self.TRACK_WIDTH)
+            bar_end = max(
+                bar_start + 2, int((f_offset / total_days) * self.TRACK_WIDTH)
+            )
+            bar_end = min(self.TRACK_WIDTH, bar_end)
+            span = bar_end - bar_start
+            done_chars = round(span * pct)
+            todo_chars = span - done_chars
+
+            line.append("·" * bar_start, style=BAR_BG)
+            if is_done:
+                line.append("█" * span, style=GOOD)
+            else:
+                if done_chars > 0:
+                    line.append("█" * done_chars, style=BLUE)
+                if todo_chars > 0:
+                    line.append("▒" * todo_chars, style=ACCENT if pct == 0 else DIM)
+            line.append("·" * (self.TRACK_WIDTH - bar_end), style=BAR_BG)
+
+            status_text = " DONE" if is_done else f" {round(pct * 100):>3}%"
+            status_style = f"bold {GOOD}" if is_done else (BLUE if pct > 0 else FAINT)
+            line.append(status_text, style=status_style)
             lines.append(line)
-        if today is not None and window_start <= today <= window_end:
-            marker = Text()
-            marker.append(" today " + today.isoformat(), style=WARN)
-            lines.append(marker)
-        out = Text()
-        for line in lines:
-            out.append(line)
-            out.append("\n")
+
+        out = Text("\n").join(lines)
         self.update(out)

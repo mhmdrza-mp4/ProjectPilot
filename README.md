@@ -24,6 +24,7 @@
     <a href="#-system-architecture--workflow"><img src="https://img.shields.io/badge/🔄_Architecture-1E293B?style=flat-square" alt="Architecture"></a>
     <a href="#-priority-scoring-engine"><img src="https://img.shields.io/badge/🧮_Scoring_Model-1E293B?style=flat-square" alt="Scoring Model"></a>
     <a href="#-quick-start"><img src="https://img.shields.io/badge/⚡_Quick_Start-1E293B?style=flat-square" alt="Quick Start"></a>
+    <a href="#-one-click-launcher"><img src="https://img.shields.io/badge/🚀_Launcher-1E293B?style=flat-square" alt="One-Click Launcher"></a>
     <a href="#-industrial-sample-project"><img src="https://img.shields.io/badge/🏭_Sample_Project-1E293B?style=flat-square" alt="Sample Project"></a>
     <a href="#-license"><img src="https://img.shields.io/badge/📄_License-1E293B?style=flat-square" alt="License"></a>
   </p>
@@ -170,11 +171,23 @@ The Microsoft Project integration is read-only. For JEV assessment, only the act
 ### 1. Prerequisites
 
 - **Operating system:** Windows for live Microsoft Project COM integration.
-- **Python:** Python 3.12 or newer as the documented baseline.
+- **Python:** Python 3.12 or newer as the documented baseline. The one-click launcher can install it automatically if it is missing.
 - **Microsoft Project:** Installed locally, with the target project open, for live schedule integration.
 - **TypeSafe JEV credentials:** Optional, for live consequence assessments.
 
-### 2. Installation (Windows PowerShell)
+### 2. One-Click Launch (Recommended)
+
+```powershell
+git clone https://github.com/mhmdrza-mp4/ProjectPilot.git
+cd ProjectPilot
+.\run.bat
+```
+
+`run.bat` checks Python, the virtual environment, and all packages, repairs anything missing or broken, and opens the dashboard after a single key press. You can also double-click `run.bat` in File Explorer. See [One-Click Launcher](#-one-click-launcher) for details and options.
+
+### 3. Manual Installation (Windows PowerShell)
+
+Prefer to set things up yourself? Use these steps instead of the launcher.
 
 ```powershell
 # 1. Clone the repository
@@ -205,7 +218,7 @@ If PowerShell blocks virtual-environment activation, temporarily allow it for th
 Set-ExecutionPolicy -Scope Process Bypass
 ```
 
-### 3. Connect to Microsoft Project
+### 4. Connect to Microsoft Project
 
 1. Open the target `.mpp` file in Microsoft Project.
 2. Make sure the intended project is active.
@@ -215,7 +228,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 6. Confirm the candidate activities and run the analysis.
 7. Inspect the ranked activities, score breakdowns, and review flags.
 
-### 4. Optional: Configure TypeSafe JEV
+### 5. Optional: Configure TypeSafe JEV
 
 Configure the credentials required by the installed TypeSafe integration.
 
@@ -226,6 +239,54 @@ TYPESAFE_API_KEY=your-key-here
 ```
 
 Keep credentials private and never commit real API keys to version control. Live JEV behavior depends on the service being configured, reachable, and returning a usable assessment.
+
+---
+
+## 🚀 One-Click Launcher
+
+`run.bat` is the recommended way to start ProjectPilot on Windows. It verifies everything the dashboard needs, repairs what is missing or broken, and opens the terminal dashboard after one key press.
+
+```powershell
+.\run.bat
+```
+
+Keep `run.bat` and `run.ps1` in the repository root, next to `pyproject.toml`.
+
+### What the Launcher Checks and Repairs
+
+| Check | What it does |
+| :--- | :--- |
+| **System** | Confirms 64-bit Windows, the presence of `pyproject.toml`, write access to the folder, and free disk space (warns below 1 GB). |
+| **Network** | Tests the connection to `pypi.org`. Being offline is acceptable when nothing needs to be installed. |
+| **Python 3.12+** | Looks for a usable interpreter. If none is found, installs Python 3.12 for the current user (winget first, then the official python.org installer). |
+| **Virtual environment** | Verifies `.venv` and its pip. Restores pip when possible; deletes and rebuilds `.venv` when it is incomplete or broken. |
+| **Packages** | Compares a SHA-256 hash of `pyproject.toml` with the installed state and installs or syncs `.[msp]` when needed. If installation fails, rebuilds `.venv` and reinstalls without the pip cache. |
+| **Dashboard engine** | Imports the dashboard module once so it is verified and pre-loaded. If the import fails, repairs the environment and tries again. |
+| **Microsoft Project** | Detects the COM registration and whether Project is running. Notice only. |
+| **TypeSafe JEV** | Looks for `TYPESAFE_API_KEY` in the environment or `.env` and never prints it. Without a key, the launcher reports that provisional mode is used. Notice only. |
+
+> [!NOTE]
+> Python is installed automatically, without a confirmation prompt, unless you start the launcher with `-AskBeforeInstall`. Rebuilding `.venv` needs an internet connection, so the launcher stops before deleting anything when it is offline.
+
+### Opening the Dashboard
+
+When all checks finish, the launcher shows a summary card and the prompt **Press any key to open the dashboard** (press `Esc` to exit instead). The dashboard is already verified and pre-loaded during the checks, so nothing else loads after the key press. Keys typed while setup was running are ignored. When the dashboard closes, the launcher prints the session duration.
+
+If a step fails, the launcher shows the last lines of the diagnostic log together with a suggested fix.
+
+### Launcher Options
+
+Pass options after the script name, for example `.\run.bat -Repair`.
+
+| Option | Effect |
+| :--- | :--- |
+| `-Repair` | Forces a clean rebuild of `.venv` and a fresh package installation. |
+| `-NoPause` | Skips the key prompt and launches immediately; errors close without waiting for Enter. |
+| `-NoAnim` | Disables animations. |
+| `-AskBeforeInstall` | Asks for confirmation before installing Python automatically. |
+
+> [!TIP]
+> Windows Terminal gives the best visuals. Consoles without true-color support fall back to 256 colors, and setting the `NO_COLOR` environment variable switches to plain ASCII output.
 
 ---
 
@@ -303,7 +364,9 @@ project/
 ├── .env.example
 ├── LICENSE
 ├── pyproject.toml
-└── README.md
+├── README.md
+├── run.bat
+└── run.ps1
 ```
 
 This layout shows the repository's main directories and files. Test, cache, and virtual-environment directories are omitted.
@@ -318,6 +381,7 @@ This layout shows the repository's main directories and files. Test, cache, and 
 - **Conflict detection is not resource planning:** Resource-overlap signals help identify potential issues; they do not establish a complete resource-capacity plan.
 - **Snapshot-based analysis:** Changes made in Microsoft Project after capture require a fresh read before the updated schedule is analyzed.
 - **Optional JEV integration:** Consequence assessments depend on service configuration, availability, and usable assessment results.
+- **Launcher scope:** The launcher manages only the project's own `.venv` folder (it can delete and recreate it) and may install Python 3.12 for the current user. It never modifies Microsoft Project files.
 - **Transparent uncertainty:** Provisional results and missing inputs should be reviewed rather than interpreted as certain conclusions.
 
 ---

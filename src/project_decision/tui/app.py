@@ -1,4 +1,4 @@
-"""PROJECT DECISION — the terminal dashboard, Version 2 design."""
+"""ProjectPilot — the terminal dashboard (cockpit design)."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Input, Label, Static
+from textual.widgets import DataTable, Input, Label, Static
+from textual.widgets.data_table import ColumnKey
 
-from project_decision.application.decision_pipeline import (
-    DecisionPipelineResult,
-)
+from project_decision.application.decision_pipeline import DecisionPipelineResult
 from project_decision.application.decision_review import ReviewStatus
 from project_decision.application.decision_workflow import (
     DecisionWorkflowState,
@@ -29,30 +28,41 @@ from project_decision.domain import PlanningPeriod
 from project_decision.domain.project_state import ProjectState
 from project_decision.infrastructure.msp.exceptions import MspError
 from project_decision.tui import data as bridge
+from project_decision.tui.theme import (
+    COCKPIT,
+    DEFAULT_THEME,
+    PALETTES,
+    css_variables,
+    pal,
+    textual_theme,
+)
 from project_decision.tui.widgets import (
-    ACCENT,
-    BLUE,
-    DIM,
-    ERROR,
-    FAINT,
-    GOOD,
-    TEXT,
-    WARN,
-    ScoreBarRow,
-    StatCard,
-    TimelineChart,
+    Brief,
+    Hero,
+    Inspector,
+    KeyBar,
+    Metric,
+    Note,
+    QueueHeader,
+    Timeline,
+    TopBar,
+    parse_report,
 )
 
-WORKFLOW_STEPS = [
-    ("[L]", "Load the active Microsoft Project plan"),
-    ("[P]", "Set the planning period"),
-    ("[C]", "Confirm the candidate session"),
-    ("[A]", "Run the decision analysis"),
-]
+HINTS = (
+    "Open a plan in Microsoft Project, then press L to read it (read-only).",
+    "Plan captured. Press P to choose the planning period.",
+    "Candidates found. Press C to confirm the session.",
+    "Session confirmed. Press A to run the analysis.",
+    "Analysis ready — ↑ ↓ to inspect activities · A to re-run · R to re-capture.",
+)
+
+
+# -- modals --------------------------------------------------------------------------
 
 
 class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
-    """Modal: configure the planning period (start/end, inclusive)."""
+    """Choose the planning period (start/end, inclusive)."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -65,26 +75,44 @@ class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
         self._end_iso = end_iso
 
     def compose(self) -> ComposeResult:
-        with Container(id="period_dialog"):
-            yield Label("▸  PLANNING PERIOD", id="period_title")
-            yield Label("START DATE (YYYY-MM-DD)", classes="field-label")
-            yield Input(
-                value=self._start_iso or "",
-                placeholder="e.g. 2026-10-22",
-                id="period_start",
-            )
-            yield Label("END DATE (YYYY-MM-DD)", classes="field-label")
-            yield Input(
-                value=self._end_iso or "",
-                placeholder="e.g. 2026-11-06",
-                id="period_end",
-            )
-            yield Label("", id="period_error")
-            yield Label(
-                "[ENTER] apply  ·  [ESC] cancel",
-                markup=False,
-                id="period_footer",
-            )
+        with Container(classes="dialog", id="period_dialog"):
+            yield Label("PLANNING PERIOD", classes="dlg-title")
+            yield Static("The window the candidate activities are discovered in (inclusive).", classes="dlg-sub")
+            yield Label("START  ·  YYYY-MM-DD", classes="field-label")
+            yield Input(value=self._start_iso or "", placeholder="e.g. 2026-10-22", id="period_start")
+            yield Label("END  ·  YYYY-MM-DD", classes="field-label")
+            yield Input(value=self._end_iso or "", placeholder="e.g. 2026-11-06", id="period_end")
+            yield Label("", id="period_info")
+            yield Label("ENTER apply   ·   ESC cancel", id="period_footer", markup=False)
+
+    def on_mount(self) -> None:
+        self._preview()
+        self.query_one("#period_start", Input).focus()
+
+    def _parse(self) -> tuple[dt.date, dt.date] | str:
+        try:
+            start = dt.date.fromisoformat(self.query_one("#period_start", Input).value.strip())
+            end = dt.date.fromisoformat(self.query_one("#period_end", Input).value.strip())
+        except ValueError:
+            return "dates must be ISO YYYY-MM-DD"
+        if start > end:
+            return "start must not be after end"
+        return start, end
+
+    def _preview(self, *, strict: bool = False) -> None:
+        P = pal(self)
+        info = self.query_one("#period_info", Label)
+        parsed = self._parse()
+        if isinstance(parsed, str):
+            blank = not (self.query_one("#period_start", Input).value.strip()
+                         or self.query_one("#period_end", Input).value.strip())
+            info.update(Text(f"✖ {parsed}", style=f"bold {P.bad}") if strict or not blank else "")
+        else:
+            span = (parsed[1] - parsed[0]).days + 1
+            info.update(Text(f"✓ {span} calendar days", style=P.good))
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._preview()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -96,27 +124,15 @@ class PeriodScreen(ModalScreen[tuple[dt.date, dt.date] | None]):
         self.action_apply()
 
     def action_apply(self) -> None:
-        start_widget = self.query_one("#period_start", Input)
-        end_widget = self.query_one("#period_end", Input)
-        error_widget = self.query_one("#period_error", Label)
-        try:
-            start = dt.date.fromisoformat(start_widget.value.strip())
-            end = dt.date.fromisoformat(end_widget.value.strip())
-        except ValueError:
-            error_widget.update(
-                Text(" ✖ dates must be ISO YYYY-MM-DD ", style=f"bold {ERROR}")
-            )
+        parsed = self._parse()
+        if isinstance(parsed, str):
+            self._preview(strict=True)
             return
-        if start > end:
-            error_widget.update(
-                Text(" ✖ start must not be after end ", style=f"bold {ERROR}")
-            )
-            return
-        self.dismiss((start, end))
+        self.dismiss(parsed)
 
 
 class HelpScreen(ModalScreen[None]):
-    """Modal: every key, every state — one honest page."""
+    """Every key, every state, one honest page."""
 
     BINDINGS = [
         Binding("escape", "close", "Close"),
@@ -124,602 +140,408 @@ class HelpScreen(ModalScreen[None]):
         Binding("h", "close", "Close"),
     ]
 
-    BINDING_LINES = [
-        ("[L]", "Load the active Microsoft Project plan (read-only COM snapshot)"),
-        ("[R]", "Re-capture the same plan later (read-only again)"),
-        ("[P]", "Set / change the planning period (inclusive window)"),
-        ("[C]", "Confirm the candidate session (explicit workflow step)"),
-        ("[A]", "Run the decision analysis (offline provisional or LIVE JEV)"),
-        ("[J]", "Switch JEV mode; refuses loudly when no API key is configured"),
-        ("[T]", "Show / hide the timeline panel"),
-        ("[?]", "This help"),
-        ("↑/↓, Enter", "Select an activity in the priority queue"),
-        ("[Q]", "Quit"),
-    ]
-
-    HONESTY_LINES = [
-        "● CONNECTED appears only after a real read; ◉ during work; ● ERROR on failure.",
-        "Offline consequences are provisional 0.5 and flagged — never shown as live JEV.",
+    KEYS = (
+        ("L", "Load the active Microsoft Project plan (read-only COM snapshot)"),
+        ("R", "Re-capture the same plan later (read-only again)"),
+        ("P", "Set or change the planning period (inclusive window)"),
+        ("C", "Confirm the candidate session (explicit workflow step)"),
+        ("A", "Run the decision analysis (offline provisional or LIVE JEV)"),
+        ("J", "Switch JEV mode; refuses loudly when no API key is configured"),
+        ("T", "Show or hide the timeline"),
+        ("S", "Guide to the bundled sample project"),
+        ("↑ ↓", "Move through the priority queue; the inspector follows"),
+        ("Ctrl+T", "Cycle colour theme (cockpit · glacier · daylight)"),
+        ("Q", "Quit"),
+    )
+    HONESTY = (
+        "● MSP LIVE appears only after a real read; the spinner shows work in progress; ✖ COM ERROR on failure.",
+        "Offline consequences are provisional 0.5 and flagged, never shown as live JEV.",
         "LIVE JEV is one API call per candidate; failures become structured review flags.",
         "Results for a changed session are discarded (stale protection), never displayed.",
         "Read-only: nothing is written, saved, or closed in Microsoft Project.",
-    ]
+    )
 
     def compose(self) -> ComposeResult:
-        with Container(id="help_dialog"):
-            yield Label(
-                "▸  HELP — KEYBOARD SHORTCUTS & SYSTEM GUARANTEES", id="help_title"
-            )
-            for key, description in self.BINDING_LINES:
-                yield Label(
-                    Text.assemble(
-                        (f"  {key:<12}", f"bold {ACCENT}"), (description, TEXT)
-                    ),
-                    classes="help-line",
-                )
-            yield Label("▸  HOW STATES ARE SHOWN", classes="help-heading")
-            for honesty_line in self.HONESTY_LINES:
-                yield Label(f"  · {honesty_line}", classes="help-line")
-            yield Label("[ESC] close", markup=False, id="help_footer")
+        P = pal(self)
+        with VerticalScroll(classes="dialog", id="help_dialog"):
+            yield Label("KEYBOARD & GUARANTEES", classes="dlg-title")
+            for key, desc in self.KEYS:
+                yield Static(Text.assemble((f" {key} ".center(8), f"bold {P.accent} on {P.raised}"),
+                                           ("  " + desc, P.ink)), classes="help-line")
+            yield Label("QUEUE FLAGS", classes="dlg-head")
+            yield Static(Text.assemble(
+                ("C", f"bold {P.bad}"), (" critical path   ", P.dim),
+                ("R", f"bold {P.info}"), (" resource conflict   ", P.dim),
+                ("V", f"bold {P.warn}"), (" needs review   ", P.dim),
+                ("D", f"bold {P.faint}"), (" missing data", P.dim)), classes="help-line")
+            yield Label("HOW STATES ARE SHOWN", classes="dlg-head")
+            for line in self.HONESTY:
+                yield Static(Text("· " + line, style=P.dim), classes="help-line")
+            yield Label("ESC close", id="help_footer", markup=False)
 
     def action_close(self) -> None:
         self.dismiss(None)
 
 
+class SampleScreen(ModalScreen[None]):
+    """The bundled sample project guide (text comes from the bridge)."""
+
+    BINDINGS = [Binding("escape", "close", "Close"), Binding("s", "close", "Close"),
+                Binding("q", "close", "Close")]
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="dialog", id="sample_dialog"):
+            yield Label("SAMPLE PROJECT", classes="dlg-title")
+            yield Static(bridge.sample_project_guide_text(), markup=False, id="sample_text")
+            yield Label("ESC close", id="help_footer", markup=False)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+# -- the app -----------------------------------------------------------------------------
+
+
 class DecisionTUI(App[None]):
-    """The PROJECT DECISION terminal dashboard (Version 2 design)."""
+    """The ProjectPilot terminal dashboard."""
 
     CSS = """
-    Screen {
-        background: #0d1117;
-        color: #e7edf5;
-    }
-    Header {
-        background: #131922;
-        color: #a8b6c9;
-        height: 1;
-        border-bottom: solid #1f2937;
-    }
-    Footer {
-        background: #131922;
-        color: #a8b6c9;
-    }
-    #page {
-        padding: 1 2 0 2;
-        height: 1fr;
-    }
-    #brand-row {
-        height: 2;
-        padding: 0 1;
-        margin-bottom: 1;
-        background: #131922;
-        border: round #263244;
-        align: left middle;
-    }
-    #brand {
-        color: #55d6be;
-        text-style: bold;
-        width: 1fr;
-    }
-    #connection {
-        color: #55d6be;
-        text-style: bold;
-        width: auto;
-        content-align: right middle;
-    }
-    #project-strip {
-        height: 5;
-        margin-bottom: 1;
-    }
-    .info-box {
-        background: #161e29;
-        border: round #2a3648;
-        padding: 0 2;
-        width: 1fr;
-        height: 5;
-        margin-right: 1;
-    }
-    .info-box:last-child { margin-right: 0; }
-    .info-title {
-        color: #64748b;
-        text-style: bold;
-    }
-    .info-value {
-        color: #f1f5f9;
-        text-style: bold;
-    }
-    .info-note {
-        color: #94a3b8;
-    }
-    #metrics {
-        height: 5;
-        margin-bottom: 1;
-    }
-    StatCard {
-        background: #151c26;
-        border: round #263244;
-        padding: 0 2;
-        width: 1fr;
-        height: 5;
-        margin-right: 1;
-    }
-    StatCard:last-child { margin-right: 0; }
-    #timeline {
-        height: 11;
-        background: #131922;
-        border: round #263244;
-        padding: 0 1;
-        margin-bottom: 1;
-    }
-    #main-row {
-        height: 1fr;
-        min-height: 10;
-    }
-    #queue-panel {
-        width: 18fr;
-        border: round #2a3648;
-        background: #131922;
-        padding: 0 1;
-        margin-right: 1;
-    }
-    #side-panel {
-        width: 11fr;
-        min-width: 46;
-        border: round #2a3648;
-        background: #151c26;
-        padding: 0 2;
-    }
-    .section-title {
-        color: #55d6be;
-        text-style: bold;
-        height: 2;
-        padding-top: 0;
-        border-bottom: solid #1f2937;
-        margin-bottom: 1;
-    }
-    DataTable {
-        height: 1fr;
-        background: #131922;
-        border: none;
-    }
-    DataTable > .datatable--header {
-        background: #1c2635;
-        color: #8ab4ff;
-        text-style: bold;
-    }
-    DataTable > .datatable--even-row {
-        background: #151c26;
-    }
-    DataTable > .datatable--odd-row {
-        background: #131922;
-    }
-    DataTable > .datatable--cursor {
-        background: #1d3b38;
-        color: #ffffff;
-        text-style: bold;
-    }
-    #queue_state {
-        height: 1fr;
-        color: #94a3b8;
-        padding: 1 2;
-    }
-    #insp_title {
-        color: #ffffff;
-        text-style: bold;
-        margin-bottom: 0;
-    }
-    #insp_score {
-        margin-bottom: 1;
-    }
-    .side-heading-label {
-        color: #8ab4ff;
-        text-style: bold;
-        margin-top: 1;
-        border-top: solid #1f2937;
-    }
-    ScoreBarRow { height: 1; }
-    #insp_facts {
-        height: auto;
-        color: #94a3b8;
-        margin-top: 1;
-        padding: 0 1;
-        background: #11161e;
-        border: round #222d3d;
-    }
-    #insp_notes {
-        height: auto;
-        color: #64748b;
-        margin-top: 0;
-        padding: 0 1;
-    }
-    #insp_next {
-        background: #111b24;
-        border-left: thick #55d6be;
-        padding: 0 1;
-        margin-top: 0;
-        color: #cbd5e1;
-    }
-    #bottom-note {
-        height: 1;
-        color: #64748b;
-        margin-top: 0;
-        padding: 0 1;
-    }
-    PeriodScreen, HelpScreen {
-        align: center middle;
-        background: rgba(10, 14, 20, 0.78);
-    }
-    #period_dialog {
-        width: 60;
-        height: auto;
-        background: #161e29;
-        border: round #55d6be;
-        padding: 1 2;
-    }
-    #period_title { color: #55d6be; text-style: bold; margin-bottom: 1; }
-    #period_hint, #period_footer { color: #94a3b8; margin-top: 1; }
-    .field-label { color: #8ab4ff; text-style: bold; margin-top: 1; }
-    #period_error { color: #ff8294; text-style: bold; margin-top: 1; }
-    #help_dialog {
-        width: 88;
-        height: auto;
-        max-height: 34;
-        background: #161e29;
-        border: round #55d6be;
-        padding: 1 2;
-    }
-    #help_title { color: #55d6be; text-style: bold; margin-bottom: 1; }
-    .help-line { color: #94a3b8; }
-    .help-heading {
-        color: #8ab4ff;
-        text-style: bold;
-        padding-top: 1;
-    }
-    #help_footer { color: #64748b; padding-top: 1; }
-    #side-panel, #queue, #timeline {
-        scrollbar-color: #2e3d52;
-        scrollbar-color-hover: #55d6be;
-        scrollbar-background: #11161e;
-    }
+    Screen { background: $pp-bg; color: $pp-ink; }
+    * { scrollbar-size-vertical: 1; scrollbar-color: $pp-line; scrollbar-color-hover: $pp-faint;
+        scrollbar-background: $pp-bg; scrollbar-corner-color: $pp-bg; }
+
+    #body { height: 1fr; padding: 0 2 1 2; }
+    #kpis { height: 4; margin-top: 1; }
+    Metric { width: 1fr; background: $pp-surface; padding: 0 1; margin-right: 1; }
+    Metric:last-of-type { margin-right: 0; }
+    #main { height: 1fr; margin-top: 1; }
+    #left { width: 1fr; padding-right: 2; }
+    #right { width: 46; min-width: 46; background: $pp-panel; padding: 1 2; }
+    #main.-narrow #right { width: 40; min-width: 40; }
+    #main.-empty #right { display: none; }
+    #main.-empty #left { padding-right: 0; }
+
+    #queue { height: 1fr; background: $pp-bg; border: none; padding: 0; overflow-x: hidden; }
+    #queue > .datatable--header { background: $pp-bg; color: $pp-faint; text-style: bold; }
+    #queue > .datatable--cursor { background: $pp-raised; color: $pp-ink; text-style: bold; }
+    #queue > .datatable--hover { background: $pp-surface; }
+    #queue > .datatable--fixed { background: $pp-bg; }
+
+    Timeline { margin-top: 1; border-top: solid $pp-line; padding-top: 1; }
+
+    ModalScreen { align: center middle; background: $pp-bg 75%; }
+    .dialog { background: $pp-panel; border: round $pp-line; padding: 1 3; height: auto; max-height: 90%; }
+    #period_dialog { width: 62; }
+    #help_dialog { width: 96; }
+    #sample_dialog { width: 100; }
+    .dlg-title { color: $pp-accent; text-style: bold; }
+    .dlg-sub { color: $pp-faint; margin-bottom: 1; }
+    .dlg-head { color: $pp-faint; text-style: bold; margin-top: 1; }
+    .field-label { color: $pp-faint; text-style: bold; margin-top: 1; }
+    .help-line { color: $pp-dim; }
+    Input { background: $pp-surface; border: round $pp-line; color: $pp-ink; width: 100%; }
+    Input:focus { border: round $pp-accent; }
+    #period_info { margin-top: 1; height: 1; }
+    #period_footer, #help_footer { color: $pp-faint; margin-top: 1; }
+    #sample_text { color: $pp-dim; margin-top: 1; }
+    Toast { background: $pp-raised; color: $pp-ink; }
+    KeyBar { link-style: none; link-style-hover: bold; }
     """
 
-    TITLE = "PROJECT DECISION"
-    SUB_TITLE = "PROJECT INTELLIGENCE TERMINAL"
+    TITLE = "ProjectPilot"
+    SUB_TITLE = "decision support for Microsoft Project"
 
     BINDINGS = [
-        Binding("l", "load", "Load plan", show=True, key_display="L"),
-        Binding("p", "period", "Period", show=True, key_display="P"),
-        Binding("c", "confirm", "Confirm", show=True, key_display="C"),
-        Binding("a", "analyze", "Analyze", show=True, key_display="A"),
-        Binding("j", "toggle_jev", "JEV mode", show=True, key_display="J"),
-        Binding("r", "reload", "Re-capture", show=True, key_display="R"),
-        Binding("t", "toggle_timeline", "Timeline", show=True, key_display="T"),
-        Binding("question_mark", "help", "Help", show=True, key_display="?"),
-        Binding("q", "quit", "Quit", show=True, key_display="Q"),
+        Binding("l", "load", "Load", key_display="L"),
+        Binding("p", "period", "Period", key_display="P"),
+        Binding("c", "confirm", "Confirm", key_display="C"),
+        Binding("a", "analyze", "Analyze", key_display="A"),
+        Binding("j", "toggle_jev", "JEV", key_display="J"),
+        Binding("r", "reload", "Re-capture", key_display="R"),
+        Binding("t", "toggle_timeline", "Timeline", key_display="T"),
+        Binding("s", "sample", "Sample", key_display="S"),
+        Binding("ctrl+t", "cycle_theme", "Theme", show=False),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("q", "quit", "Quit", key_display="Q"),
     ]
 
-    _THEME_ALLOWLIST = {
-        "textual-dark",
-        "textual-light",
-        "nord",
-        "dracula",
-        "tokyo-night",
-        "gruvbox",
-        "catppuccin-mocha",
-        "monokai",
-        "rose-pine",
-        "solarized-dark",
-    }
-
-    @property
-    def available_themes(self):
-        themes = super().available_themes
-        return {
-            name: theme
-            for name, theme in themes.items()
-            if name in self._THEME_ALLOWLIST
-        }
+    def get_css_variables(self) -> dict[str, str]:
+        variables = super().get_css_variables()
+        variables.update(css_variables(PALETTES.get(self.theme, COCKPIT)))
+        return variables
 
     def __init__(self) -> None:
         super().__init__()
+        for palette in PALETTES.values():
+            self.register_theme(textual_theme(palette))
+        self.theme = DEFAULT_THEME
+        for name in [n for n in self.available_themes if n not in PALETTES]:
+            self.unregister_theme(name)  # the palette picker only offers our themes
         self._subject: DecisionWorkflowState | None = None
         self._result: DecisionPipelineResult | None = None
         self._mode: str = bridge.OFFLINE_MODE
-        self._connection_kind: str = "disconnected"
+        self._connection_kind = "disconnected"
         self._queue_rows: list[str] = []
         self._ranked_by_id: dict[str, Any] = {}
-        self._panel_message: str | None = None
         self._timeline_user: bool | None = None
+        self._frame = 0
+        self._narrow = False
 
-    # -- composition -------------------------------------------------------
+    # -- composition -----------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Container(id="page"):
-            with Horizontal(id="brand-row"):
-                yield Label(
-                    "◆  PROJECT PILOT  ·  DECISION INTELLIGENCE ENGINE", id="brand"
-                )
-                yield Static("● OFFLINE", id="connection")
-            with Horizontal(id="project-strip"):
-                with Vertical(classes="info-box"):
-                    yield Label("▸ ACTIVE PROJECT", classes="info-title")
-                    yield Label(
-                        "no project loaded", classes="info-value", id="info_project"
-                    )
-                    yield Label(
-                        "press [L] to load the active plan",
-                        markup=False,
-                        classes="info-note",
-                        id="info_project_note",
-                    )
-                with Vertical(classes="info-box"):
-                    yield Label("▸ ANALYSIS WINDOW", classes="info-title")
-                    yield Label("not set", classes="info-value", id="info_window")
-                    yield Label(
-                        "press [P]",
-                        markup=False,
-                        classes="info-note",
-                        id="info_window_note",
-                    )
-                with Vertical(classes="info-box"):
-                    yield Label("▸ DATA SOURCE & ENGINE", classes="info-title")
-                    yield Label(
-                        "● DISCONNECTED", classes="info-value", id="info_source"
-                    )
-                    yield Label(
-                        "JEV OFFLINE (provisional)",
-                        classes="info-note",
-                        id="info_source_note",
-                    )
-            with Horizontal(id="metrics"):
-                yield StatCard(id="m_activities")
-                yield StatCard(id="m_candidates")
-                yield StatCard(id="m_review")
-                yield StatCard(id="m_flags")
-            yield TimelineChart("", id="timeline")
-            with Horizontal(id="main-row"):
-                with Vertical(id="queue-panel"):
-                    yield Label(
-                        "▸  PRIORITY QUEUE", classes="section-title", id="queue_title"
-                    )
-                    yield Static("", id="queue_state", markup=False)
-                    yield DataTable(
-                        cursor_type="row",
-                        show_cursor=True,
-                        zebra_stripes=True,
-                        id="queue",
-                    )
-                with VerticalScroll(id="side-panel"):
-                    yield Label("▸  ACTIVITY INSPECTOR", classes="section-title")
-                    yield Label("Select an activity from the queue", id="insp_title")
-                    yield Label("", id="insp_score")
-                    yield Label("DECISION SIGNALS", classes="side-heading-label")
-                    yield Static("", id="insp_signals")
-                    yield ScoreBarRow("", id="insp_sp")
-                    yield ScoreBarRow("", id="insp_si")
-                    yield ScoreBarRow("", id="insp_cd")
-                    yield Static("", id="insp_facts")
-                    yield Static("", id="insp_notes")
-                    yield Label("RECOMMENDED NEXT ACTION", classes="side-heading-label")
-                    yield Static("", id="insp_next")
-            yield Label(
-                "Read-only Microsoft Project integration — nothing is "
-                "written back · press [?] for help",
-                markup=False,
-                id="bottom-note",
-            )
-        yield Footer()
+        yield TopBar(id="topbar")
+        with Vertical(id="body"):
+            yield Brief(id="brief")
+            with Horizontal(id="kpis"):
+                yield Metric(id="m_activities")
+                yield Metric(id="m_candidates")
+                yield Metric(id="m_review")
+                yield Metric(id="m_flags")
+            with Horizontal(id="main", classes="-empty"):
+                with Vertical(id="left"):
+                    yield QueueHeader(id="qhead")
+                    yield Hero(id="hero")
+                    yield DataTable(cursor_type="row", zebra_stripes=False, cell_padding=1, id="queue")
+                    yield Note(id="note")
+                    yield Timeline(id="timeline")
+                with VerticalScroll(id="right"):
+                    yield Inspector(id="inspector")
+        yield KeyBar(id="keybar")
 
     def on_mount(self) -> None:
-        queue = self.query_one("#queue", DataTable)
-        queue.add_columns("RANK", "ACTIVITY", "INDEX", "SP", "SI", "CD", "FLAGS")
-        widths = (6, 32, 7, 6, 6, 6, 9)
-        for column, width in zip(queue.columns.values(), widths):
-            column.width = width
-
-        self._metric("m_activities", "ACTIVITIES", "—", "no project loaded", FAINT)
-        self._metric("m_candidates", "CANDIDATES", "—", "set a period [P]", FAINT)
-        self._metric("m_review", "NEEDS REVIEW", "—", "known after analysis", FAINT)
-        self._metric("m_flags", "RESOURCE FLAGS", "—", "conflicts load with [L]", FAINT)
-        self.query_one("#timeline", TimelineChart).update(
-            Text(
-                "\n  ▸ TIMELINE — no project loaded yet; press [L] to capture the active Microsoft Project schedule",
-                style=DIM,
-            )
-        )
-        self._show_stepper()
+        self._narrow = self.size.width < 120
+        self.query_one("#main").set_class(self._narrow, "-narrow")
+        self._build_columns()
+        self.query_one("#queue", DataTable).display = False
+        self.query_one("#qhead").display = False
+        self._reset_metrics()
+        self.query_one("#timeline", Timeline).set_empty("press L to capture the active schedule")
+        self.theme_changed_signal.subscribe(self, self._on_theme_changed)
+        self.set_interval(0.1, self._tick)
         self._set_connection("disconnected")
+        self._refresh_brief()
+        self._sync_flow()
         self._layout_timeline(self.size.height)
 
+    def _build_columns(self) -> None:
+        """Wide terminals show SP/SI/CD in the queue; narrow ones leave them to the inspector."""
+        queue = self.query_one("#queue", DataTable)
+        queue.clear(columns=True)
+        def head(label: str) -> Text:
+            return Text(label, justify="right")  # headers sit exactly over right-aligned numbers
+
+        queue.add_column(head("#"), key="rank", width=4)
+        queue.add_column("ACTIVITY", key="activity", width=30)
+        queue.add_column(head("INDEX"), key="index", width=7)
+        if not self._narrow:
+            queue.add_column(head("SP"), key="sp", width=5)
+            queue.add_column(head("SI"), key="si", width=5)
+            queue.add_column(head("CD"), key="cd", width=5)
+        queue.add_column("FLAGS", key="flags", width=7)
+
+    def _on_theme_changed(self, _theme) -> None:
+        self.call_after_refresh(self._repaint)
+
+    def _repaint(self) -> None:
+        for widget in self.query("TopBar, Brief, Metric, QueueHeader, Note, Hero, Inspector, Timeline, KeyBar"):
+            widget.refresh(layout=True)
+        if self._result is not None:
+            self._fill_queue(self._result.decision_result.ranked_tasks)
+
+    def action_cycle_theme(self) -> None:
+        names = list(PALETTES)
+        self.theme = names[(names.index(self.theme) + 1) % len(names)] if self.theme in names else names[0]
+        self.notify(f"Theme: {self.theme}", markup=False)
+
+    def _tick(self) -> None:
+        if self._connection_kind != "loading":
+            return
+        self._frame += 1
+        for widget_id in ("#topbar", "#hero"):
+            widget = self.query_one(widget_id)
+            widget.frame = self._frame  # type: ignore[attr-defined]
+            widget.refresh()
+
     def on_resize(self, event) -> None:
+        narrow = event.size.width < 120
+        if narrow != self._narrow:
+            self._narrow = narrow
+            self.query_one("#main").set_class(narrow, "-narrow")
+            self._build_columns()
+            if self._result is not None:
+                self._fill_queue(self._result.decision_result.ranked_tasks)
         self._layout_timeline(event.size.height)
         self._fit_queue_columns()
 
+    def _right_width(self) -> int:
+        """Inspector width: 30% of the terminal on wide screens (46-66), fixed on narrow ones."""
+        if self._narrow:
+            return 40
+        return max(46, min(66, round(self.size.width * 0.30)))
+
     def _fit_queue_columns(self) -> None:
         queue = self.query_one("#queue", DataTable)
-        panel = self.query_one("#queue-panel")
-        declared = panel.size.width if panel.size is not None else 0
-        available = max(38, (declared or self.size.width * 2 // 3) - 6)
-        fixed = 6 + 7 + 6 + 6 + 6 + 9
-        activity = min(42, max(16, available - fixed))
-        widths = (6, activity, 7, 6, 6, 6, 9)
-        for column, width in zip(list(queue.columns.values()), widths):
-            column.width = width
+        right_panel = self.query_one("#right")
+        right_w = self._right_width()
+        right_panel.styles.width = right_w
+        right_panel.styles.min_width = right_w
+        right = 0 if self.query_one("#main").has_class("-empty") else right_w + 2
+        width = self.size.width - 4 - right  # body padding, inspector, gutter
+        fixed = (4 + 7 + 7 + 3 * 2 if self._narrow else 4 + 7 + 5 + 5 + 5 + 7 + 7 * 2) + 2
+        column = queue.columns.get(ColumnKey("activity"))
+        if column is not None:
+            column.width = max(14, width - fixed)  # activity takes whatever the numbers leave
+            queue.refresh(layout=True)
 
-    # -- timeline visibility ---------------------------------------------------
+    # -- timeline visibility -------------------------------------------------------------
 
     def _layout_timeline(self, terminal_height: int) -> None:
-        timeline = self.query_one("#timeline", TimelineChart)
-        if self._timeline_user is None:
-            timeline.display = terminal_height >= 42
-        else:
-            timeline.display = self._timeline_user
+        timeline = self.query_one("#timeline", Timeline)
+        if self._subject is None:
+            timeline.display = False
+            return
+        timeline.display = (terminal_height >= 44) if self._timeline_user is None else self._timeline_user
 
     def action_toggle_timeline(self) -> None:
-        timeline = self.query_one("#timeline", TimelineChart)
+        if self._subject is None:
+            self.notify("Load a project first — press L.", severity="warning", markup=False)
+            return
+        timeline = self.query_one("#timeline", Timeline)
         self._timeline_user = not timeline.display
         timeline.display = self._timeline_user
 
-    # -- selection -------------------------------------------------------------
+    # -- selection ----------------------------------------------------------------------
 
-    def on_data_table_cursor_row_changed(self, event) -> None:
-        row_index = event.cursor_row
-        if 0 <= row_index < len(self._queue_rows):
-            self._render_inspector(self._queue_rows[row_index])
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.row_key is not None and event.row_key.value is not None:
+            self._render_inspector(str(event.row_key.value))
 
-    def on_data_table_row_selected(self, event) -> None:
-        self.on_data_table_cursor_row_changed(event)
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key is not None and event.row_key.value is not None:
+            self._render_inspector(str(event.row_key.value))
 
-    # -- state helpers ---------------------------------------------------------
+    # -- workflow state --------------------------------------------------------------------
 
-    def _set_connection(self, kind: str, detail: str = "") -> None:
-        self._connection_kind = kind
-        chip = self.query_one("#connection", Static)
-        is_live_jev = self._mode == bridge.LIVE_MODE
-        mode_tag = "JEV LIVE" if is_live_jev else "JEV OFFLINE"
-        mode_color = GOOD if is_live_jev else WARN
-
-        if kind == "connected":
-            chip.update(
-                Text.assemble(
-                    ("● LIVE MSP ", f"bold {GOOD}"),
-                    ("│ ", FAINT),
-                    (f"◆ {mode_tag}", f"bold {mode_color}"),
-                )
-            )
-        elif kind == "loading":
-            chip.update(Text(f"◉ {detail or 'READING MSP…'}", style=f"bold {WARN}"))
-        elif kind == "error":
-            chip.update(Text("● COM ERROR", style=f"bold {ERROR}"))
-        else:
-            chip.update(
-                Text.assemble(
-                    ("○ OFFLINE ", f"bold {DIM}"),
-                    ("│ ", FAINT),
-                    (f"◇ {mode_tag}", f"bold {FAINT}"),
-                )
-            )
-
-    def _info(self, value_id: str, value: str, note: str) -> None:
-        self.query_one(f"#{value_id}", Label).update(value)
-        self.query_one(f"#{value_id}_note", Label).update(note)
-
-    def _metric(
-        self,
-        metric_id: str,
-        title: str,
-        value: str,
-        detail: str = "",
-        color: str = ACCENT,
-    ) -> None:
-        self.query_one(f"#{metric_id}", StatCard).set_metric(
-            title, value, detail, color
-        )
-
-    def _stepper(self) -> Text:
+    def _step(self) -> int:
         if self._subject is None:
-            current = 0
-        elif self._subject.planning_period is None:
-            current = 1
-        elif not self._subject.confirmed:
-            current = 2
-        elif self._result is None:
-            current = 3
-        else:
-            current = 4
-
-        text = Text()
-        text.append(" ▸ DECISION WORKFLOW PIPELINE\n\n", style=f"bold {BLUE}")
-        for index, (key, description) in enumerate(WORKFLOW_STEPS):
-            step_num = index + 1
-            if index < current:
-                text.append(f"   ✓ Step {step_num}  ", style=f"bold {GOOD}")
-                text.append(f"{key:<5} {description}\n", style=DIM)
-            elif index == current:
-                text.append(f"   ▶ Step {step_num}  ", style=f"bold {ACCENT}")
-                text.append(f"{key:<5} {description}  ← NEXT\n", style=f"bold {TEXT}")
-            else:
-                text.append(f"   · Step {step_num}  ", style=FAINT)
-                text.append(f"{key:<5} {description}\n", style=FAINT)
-
-        text.append("\n")
-        if current == 4:
-            text.append(
-                "   ✓ Workflow complete — select activities in the queue.", style=GOOD
-            )
-        else:
-            text.append(
-                "   Each step unlocks the next; reasons for unavailable actions\n"
-                "   appear automatically when you press their key.",
-                style=FAINT,
-            )
-        return text
-
-    def _refresh_queue_state(self) -> None:
-        state_widget = self.query_one("#queue_state", Static)
-        queue = self.query_one("#queue", DataTable)
-        if self._panel_message is not None:
-            queue.display = False
-            state_widget.display = True
-            state_widget.update(self._panel_message)
-            return
-        has_rows = len(self._queue_rows) > 0
-        queue.display = has_rows
-        state_widget.display = not has_rows
-        state_widget.update(self._stepper())
-
-    def _show_stepper(self) -> None:
-        self._panel_message = None
-        self._refresh_queue_state()
+            return 0
+        if self._subject.planning_period is None:
+            return 1
+        if not self._subject.confirmed:
+            return 2
+        return 3 if self._result is None else 4
 
     def _ns_stale(self) -> bool:
         return result_is_stale(self._subject, self._result)
 
-    def _window(self, state: DecisionWorkflowState | None) -> tuple[str, str]:
+    def _sync_flow(self, hint: str | None = None) -> None:
+        step = self._step()
+        stale = self._result is not None and self._ns_stale()
+        loaded = self._subject is not None
+        top = self.query_one("#topbar", TopBar)
+        top.step, top.stale = step, stale
+        top.jev_live = self._mode == bridge.LIVE_MODE
+        top.refresh()
+        hero = self.query_one("#hero", Hero)
+        hero.step = step
+        hero.refresh()
+        keys = self.query_one("#keybar", KeyBar)
+        keys.step, keys.loaded = step, loaded
+        self._sync_welcome()
+        keys.hint = hint or ("Results are stale — press A to re-run the analysis." if stale else HINTS[step])
+        keys.refresh()
+
+    def _set_connection(self, kind: str, detail: str = "") -> None:
+        self._connection_kind = kind
+        top = self.query_one("#topbar", TopBar)
+        top.conn, top.conn_detail = kind, detail
+        top.jev_live = self._mode == bridge.LIVE_MODE
+        top.refresh()
+
+    def _metric(self, metric_id: str, title: str, value: str, detail: str = "", role: str = "accent") -> None:
+        self.query_one(f"#{metric_id}", Metric).set_metric(title, value, detail, role)
+
+    def _reset_metrics(self) -> None:
+        self._metric("m_activities", "ACTIVITIES", "—", "no project loaded")
+        self._metric("m_candidates", "CANDIDATES", "—", "set a period with P")
+        self._metric("m_review", "NEEDS REVIEW", "—", "known after analysis")
+        self._metric("m_flags", "RESOURCE FLAGS", "—", "loaded with the plan")
+
+    def _window(self) -> tuple[str, str, str]:
+        state = self._subject
         if state is None:
-            return "not set", "press [L] first"
+            return "", "", "faint"
         period = state.planning_period
         if period is None:
-            return "not set", "press [P] to choose the window"
+            return "window not set", "press P to choose it", "warn"
         value = f"{period.start_date.isoformat()} → {period.end_date.isoformat()}"
+        wd = f"{period.working_days} working days"
         if self._ns_stale():
-            note = f"{period.working_days} working days · stale — press [A]"
-        elif state.confirmed:
-            note = (
-                f"{period.working_days} working days · confirmed — press [A]"
-                if self._result is None
-                else f"{period.working_days} working days · [A] to re-run"
-            )
-        else:
-            note = f"{period.working_days} working days · confirm with [C]"
-        return value, note
+            return value, f"{wd} · stale — press A", "warn"
+        if state.confirmed:
+            return value, (f"{wd} · confirmed — press A" if self._result is None else f"{wd} · A to re-run"), "good"
+        return value, f"{wd} · confirm with C", "dim"
 
-    def _source(self, kind: str) -> tuple[str, str]:
-        mode_note = (
-            "JEV OFFLINE (provisional)"
-            if self._mode == bridge.OFFLINE_MODE
-            else "JEV LIVE — 1 API call / candidate"
-        )
-        if kind == "connected":
-            return "Microsoft Project · read-only", f"active doc · {mode_note}"
-        if kind == "error":
-            return "● COM ERROR", f"see queue panel · {mode_note}"
-        return "● DISCONNECTED", mode_note
+    def _refresh_brief(self) -> None:
+        brief = self.query_one("#brief", Brief)
+        if self._subject is None:
+            brief.set("No project loaded",
+                      "the COM read failed — details below" if self._connection_kind == "error"
+                      else "Waiting for a Microsoft Project plan")
+            return
+        state = self._subject.project_state
+        stamp = (f"status {state.status_date.strftime('%m-%d')}"
+                 if state.status_date is not None and state.status_date != state.captured_at.date()
+                 else f"as of {state.captured_at.strftime('%m-%d')}")
+        engine = "JEV live" if self._mode == bridge.LIVE_MODE else "JEV offline · provisional"
+        meta = (f"{len(state.tasks)} tasks · {len(state.resources)} resources · {stamp}"
+                f" · Microsoft Project, read-only · {engine}")
+        value, note, role = self._window()
+        brief.set(state.project_name or state.project_id, meta, value, note, role)
 
-    def _bottom_note(self, text: Text | None) -> None:
-        widget = self.query_one("#bottom-note", Label)
-        widget.update(
-            text
-            if text is not None
-            else Text(
-                " Read-only Microsoft Project integration — nothing is "
-                "written back · press [?] for help",
-                style=FAINT,
-            )
-        )
+    def _show_hero(self, mode: str, title: str = "", detail: str = "",
+                   blocks: list[tuple[str, str]] | None = None) -> None:
+        hero = self.query_one("#hero", Hero)
+        hero.mode, hero.title, hero.detail, hero.blocks = mode, title, detail, blocks or []
+        self._refresh_main()
+        hero.refresh()
+        self._sync_welcome()
 
-    # -- [L] / [R]: load + re-capture ------------------------------------------
+    def _welcome_visible(self) -> bool:
+        """True while the hero banner (which already carries the name) is on screen."""
+        hero = self.query_one("#hero", Hero)
+        return hero.mode == "welcome" and hero.display
+
+    def _sync_welcome(self) -> None:
+        """On the welcome screen the banner, step list and read-only note live in
+        the hero, so the chrome around it drops its duplicates."""
+        welcome = self._welcome_visible()
+        top = self.query_one("#topbar", TopBar)
+        top.brand = top.rail = not welcome
+        top.refresh()
+        self.query_one("#note", Note).display = not welcome
+        keys = self.query_one("#keybar", KeyBar)
+        keys.welcome = welcome
+        keys.refresh()
+
+    def _refresh_main(self) -> None:
+        has_rows = bool(self._queue_rows)
+        hero = self.query_one("#hero", Hero)
+        busy_or_error = hero.mode in ("busy", "error")
+        show_table = has_rows and not busy_or_error
+        self.query_one("#queue", DataTable).display = show_table
+        self.query_one("#qhead").display = has_rows
+        hero.display = not show_table
+        self.query_one("#main").set_class(not has_rows, "-empty")
+        self._fit_queue_columns()
+
+    def _set_note(self, kind: str, detail: str = "") -> None:
+        note = self.query_one("#note", Note)
+        note.kind, note.detail = kind, detail
+        note.refresh()
+
+    # -- L / R: load + re-capture --------------------------------------------------------------
 
     @work(exclusive=True, thread=True, group="msp")
     def _worker_load(self) -> None:
@@ -732,8 +554,7 @@ class DecisionTUI(App[None]):
 
     def action_load(self) -> None:
         self._set_connection("loading", "READING MSP…")
-        self._panel_message = " ◉ Attaching to Microsoft Project via COM… (read-only)."
-        self._refresh_queue_state()
+        self._show_hero("busy", "Attaching to Microsoft Project", "Reading the active plan through COM (read-only).")
         self._worker_load()
 
     def action_reload(self) -> None:
@@ -744,98 +565,55 @@ class DecisionTUI(App[None]):
         self._result = None
         self._ranked_by_id = {}
         self._queue_rows = []
+        self.query_one("#queue", DataTable).clear()
+        self.query_one("#inspector", Inspector).clear()
         self._set_connection("connected")
         completed = sum(1 for t in state.tasks if t.progress >= 1.0)
-        in_progress = sum(1 for t in state.tasks if 0.0 < t.progress < 1.0)
+        started = sum(1 for t in state.tasks if 0.0 < t.progress < 1.0)
         critical = sum(1 for t in state.tasks if t.is_critical is True)
-
-        status_str = (
-            f" · status {state.status_date.strftime('%m-%d')}"
-            if state.status_date is not None
-            and state.status_date != state.captured_at.date()
-            else f" · as of {state.captured_at.strftime('%m-%d')}"
-        )
-        self._info(
-            "info_project",
-            state.project_name or state.project_id,
-            f"{len(state.tasks)} tasks · {len(state.resources)} resources{status_str}",
-        )
-        self._info("info_window", *self._window(self._subject))
-        value, note = self._source("connected")
-        self._info("info_source", value, note)
-        self._metric(
-            "m_activities",
-            "ACTIVITIES",
-            str(len(state.tasks)),
-            (
-                f"{completed} done · {in_progress} started"
-                if in_progress or completed
-                else "none started"
-            ),
-            ACCENT,
-        )
-        self._metric("m_candidates", "CANDIDATES", "—", "set a period [P]", BLUE)
-        self._metric("m_review", "NEEDS REVIEW", "—", "known after analysis", FAINT)
-        self._metric(
-            "m_flags",
-            "RESOURCE FLAGS",
-            "—",
-            f"{critical} critical-path" if critical else "not reported yet",
-            FAINT,
-        )
+        self._metric("m_activities", "ACTIVITIES", str(len(state.tasks)),
+                     f"{completed} done · {started} started" if started or completed else "none started")
+        self._metric("m_candidates", "CANDIDATES", "—", "set a period with P", "info")
+        self._metric("m_review", "NEEDS REVIEW", "—", "known after analysis")
+        self._metric("m_flags", "RESOURCE FLAGS", "—",
+                     f"{critical} critical-path" if critical else "not reported yet")
         if state.capture_warnings:
-            self._bottom_note(
-                Text(" ● capture warnings: ", style=f"bold {WARN}").append(
-                    " ".join(state.capture_warnings)[:120], style=DIM
-                )
-            )
+            self._set_note("warn", " ".join(state.capture_warnings)[:160])
         else:
-            self._bottom_note(None)
+            self._set_note("readonly")
+        self.query_one("#qhead", QueueHeader).status = None
         self._render_schedule_draft(state)
-        self._show_stepper()
-        self._set_queue_title(None)
-        self.notify(
-            f"Loaded {len(state.tasks)} activities from "
-            f"{state.project_id or 'Microsoft Project'} (read-only)."
-        )
+        self._show_hero("ready")
+        self._layout_timeline(self.size.height)
+        self._refresh_brief()
+        self._sync_flow()
+        self.notify(f"Loaded {len(state.tasks)} activities from {state.project_id or 'Microsoft Project'} (read-only).")
 
     def _apply_load_error(self, exc: MspError) -> None:
         self._subject = None
         self._result = None
         self._queue_rows = []
+        self.query_one("#inspector", Inspector).clear()
         self._set_connection("error")
-        self.query_one("#info_project", Label).update("no project loaded")
-        self.query_one("#info_project_note", Label).update(
-            "the COM read failed — details in the queue panel"
-        )
-        self._info("info_window", *self._window(None))
-        value, note = self._source("error")
-        self._info("info_source", value, note)
-        self._metric("m_activities", "ACTIVITIES", "—", "load failed", ERROR)
-        self._metric("m_candidates", "CANDIDATES", "—", "—", FAINT)
-        self._metric("m_review", "NEEDS REVIEW", "—", "—", FAINT)
-        self._metric("m_flags", "RESOURCE FLAGS", "—", "—", FAINT)
-        self._panel_message = bridge.friendly_msp_error(exc)
-        self._refresh_queue_state()
-        self._bottom_note(None)
-        self.notify(
-            "Microsoft Project could not be read (see queue panel).", severity="error"
-        )
+        self._reset_metrics()
+        self._metric("m_activities", "ACTIVITIES", "—", "load failed", "bad")
+        self._show_hero("error", "COULD NOT READ MICROSOFT PROJECT", blocks=parse_report(bridge.friendly_msp_error(exc)))
+        self._layout_timeline(self.size.height)
+        self._refresh_brief()
+        self._sync_flow("Fix the cause above, then press L to try again.")
+        self.notify("Microsoft Project could not be read (details on screen).", severity="error")
 
-    # -- [P] period ------------------------------------------------------------
+    # -- P period ---------------------------------------------------------------------------------
 
     def action_period(self) -> None:
         if self._subject is None:
-            self.notify(
-                "Load a project first — press [L].", severity="warning", markup=False
-            )
+            self.notify("Load a project first — press L.", severity="warning", markup=False)
             return
-        state = self._subject.project_state
         if self._subject.planning_period is not None:
             start = self._subject.planning_period.start_date.isoformat()
             end = self._subject.planning_period.end_date.isoformat()
         else:
-            low, high = bridge.suggest_period_bounds(state)
+            low, high = bridge.suggest_period_bounds(self._subject.project_state)
             start = low.isoformat() if low is not None else ""
             end = high.isoformat() if high is not None else ""
         self.push_screen(PeriodScreen(start, end), self._on_period_result)
@@ -844,258 +622,150 @@ class DecisionTUI(App[None]):
         if result is None:
             return
         start, end = result
-        self._subject = set_planning_period(
-            self._subject, PlanningPeriod(start_date=start, end_date=end)
-        )
+        self._subject = set_planning_period(self._subject, PlanningPeriod(start_date=start, end_date=end))
         session = self._subject.planning_session
-        self._metric(
-            "m_candidates",
-            "CANDIDATES",
-            str(len(session.candidate_task_ids)),
-            f"{self._subject.planning_period.working_days} working days",
-            BLUE,
-        )
-        self._info("info_window", *self._window(self._subject))
-        self._set_queue_title(self._result)
-        self._bottom_note(None)
-        self._show_stepper()
-        self.notify(
-            f"Period set — {len(session.candidate_task_ids)} candidates "
-            "discovered. Press [C] to confirm.",
-            markup=False,
-        )
+        self._metric("m_candidates", "CANDIDATES", str(len(session.candidate_task_ids)),
+                     f"{self._subject.planning_period.working_days} working days", "info")
+        self._set_queue_header(self._result)
+        self._refresh_brief()
+        self._sync_flow()
+        self.notify(f"Period set — {len(session.candidate_task_ids)} candidates discovered. Press C to confirm.",
+                    markup=False)
 
-    # -- [C] confirm -----------------------------------------------------------
+    # -- C confirm ----------------------------------------------------------------------------------
 
     def action_confirm(self) -> None:
         if self._subject is None:
-            self.notify(
-                "Load a project first — press [L].", severity="warning", markup=False
-            )
+            self.notify("Load a project first — press L.", severity="warning", markup=False)
             return
         if self._subject.planning_period is None:
-            self.notify(
-                "Set a planning period first — press [P].",
-                severity="warning",
-                markup=False,
-            )
+            self.notify("Set a planning period first — press P.", severity="warning", markup=False)
             return
         try:
             self._subject = confirm_session(self._subject)
         except ValueError as exc:
             self.notify(str(exc), severity="error", markup=False)
             return
-        self._info("info_window", *self._window(self._subject))
-        self.notify(
-            "Session confirmed — press [A] to run the decision analysis.", markup=False
-        )
-        self._show_stepper()
+        self._refresh_brief()
+        self._sync_flow()
+        self.notify("Session confirmed — press A to run the decision analysis.", markup=False)
 
-    # -- [?] help --------------------------------------------------------------
+    # -- ? help / S sample ---------------------------------------------------------------------------
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
-    # -- [J] JEV mode ----------------------------------------------------------
+    def action_sample(self) -> None:
+        self.push_screen(SampleScreen())
+
+    # -- J JEV mode -------------------------------------------------------------------------------------
 
     def action_toggle_jev(self) -> None:
         if self._mode == bridge.OFFLINE_MODE:
             evaluator, note = bridge.evaluator_for_mode(bridge.LIVE_MODE)
             if evaluator is None:
-                self.notify(
-                    note or "LIVE JEV unavailable; staying offline.", severity="warning"
-                )
+                self.notify(note or "LIVE JEV unavailable; staying offline.", severity="warning")
                 return
             self._mode = bridge.LIVE_MODE
-            self.notify(
-                "JEV LIVE — the next analysis evaluates consequences through "
-                "the configured TypeSafe integration (1 API call per candidate)."
-            )
+            self.notify("JEV LIVE — the next analysis evaluates consequences through the configured "
+                        "TypeSafe integration (1 API call per candidate).")
         else:
             self._mode = bridge.OFFLINE_MODE
-            self.notify(
-                "JEV OFFLINE — consequences will be provisional (0.5) and "
-                "flagged for review."
-            )
-        self._refresh_status_after_mode_change()
+            self.notify("JEV OFFLINE — consequences will be provisional (0.5) and flagged for review.")
+        self._set_connection(self._connection_kind, self.query_one("#topbar", TopBar).conn_detail)
+        self._refresh_brief()
+        self._sync_flow()
 
-    def _refresh_status_after_mode_change(self) -> None:
-        self._set_connection(self._connection_kind)
-        value, note = self._source(
-            "connected"
-            if self._connection_kind == "connected"
-            else ("error" if self._connection_kind == "error" else "disconnected")
-        )
-        self._info("info_source", value, note)
-
-    # -- [A] analyze -----------------------------------------------------------
+    # -- A analyze ------------------------------------------------------------------------------------------
 
     def action_analyze(self) -> None:
         if self._subject is None:
-            self.notify(
-                "Load a project first — press [L].", severity="warning", markup=False
-            )
+            self.notify("Load a project first — press L.", severity="warning", markup=False)
             return
         if self._subject.planning_session is None:
-            self.notify(
-                "Set a planning period first — press [P].",
-                severity="warning",
-                markup=False,
-            )
+            self.notify("Set a planning period first — press P.", severity="warning", markup=False)
             return
         if not self._subject.confirmed:
-            self.notify(
-                "The session is not confirmed — press [C] (the data model "
-                "requires a deliberate confirmation).",
-                severity="warning",
-                markup=False,
-            )
+            self.notify("The session is not confirmed — press C (the data model requires a deliberate confirmation).",
+                        severity="warning", markup=False)
             return
         evaluator, note = bridge.evaluator_for_mode(self._mode)
         if note:
             self.notify(note, severity="warning")
             return
-        mode = self._mode
-        session_size = len(self._subject.planning_session.candidate_task_ids)
-        if mode == bridge.LIVE_MODE:
-            self._set_connection(
-                "loading",
-                f"ANALYZING — live JEV: 1 API call per candidate ({session_size})…",
-            )
-            self._panel_message = (
-                f" ◉ Analyzing — LIVE JEV, one API call per candidate "
-                f"({session_size} calls). This can take a while."
-            )
+        size = len(self._subject.planning_session.candidate_task_ids)
+        if self._mode == bridge.LIVE_MODE:
+            self._set_connection("loading", f"ANALYZING · {size} JEV calls…")
+            self._show_hero("busy", "Analyzing with LIVE JEV",
+                            f"One API call per candidate ({size} calls). This can take a while.")
         else:
             self._set_connection("loading", "ANALYZING…")
-            self._panel_message = (
-                " ◉ Analyzing — offline consequences (provisional 0.5, flagged)."
-            )
-        self._refresh_queue_state()
+            self._show_hero("busy", "Analyzing", "Offline consequences: provisional 0.5, flagged for review.")
         self._worker_analyze(evaluator)
 
     @work(exclusive=True, thread=True, group="analyze")
     def _worker_analyze(self, evaluator) -> None:
         try:
             result = run_decision(self._subject, evaluator)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - surfaced as a structured state
             self.call_from_thread(self._apply_run_error, exc)
             return
         self.call_from_thread(self._apply_result, result)
 
     def _apply_run_error(self, exc: Exception) -> None:
         self._set_connection("error")
-        self._panel_message = (
-            f" Analysis failed.\n\n {exc.__class__.__name__}: {str(exc)[:160]}\n\n"
-            " Nothing was changed in Microsoft Project; the loaded state is "
-            "unchanged. Press [A] to try again."
-        )
-        self._refresh_queue_state()
-        self.notify(
-            "The decision analysis failed — see the queue panel.", severity="error"
-        )
+        self._show_hero("error", "ANALYSIS FAILED", blocks=[
+            ("WHAT", f"{exc.__class__.__name__}: {str(exc)[:200]}"),
+            ("WHY", "The decision analysis could not complete, so no ranking is shown."),
+            ("NEXT", "Nothing was changed in Microsoft Project and the loaded state is unchanged. Press A to try again."),
+        ])
+        self._sync_flow("The analysis failed — press A to try again.")
+        self.notify("The decision analysis failed (details on screen).", severity="error")
 
     def _apply_result(self, result: DecisionPipelineResult) -> None:
-        if self._ns_stale_for(result):
-            self.notify(
-                "Analysis discarded — the workflow changed while it ran.",
-                severity="warning",
-            )
+        if result_is_stale(self._subject, result):
+            self.notify("Analysis discarded — the workflow changed while it ran.", severity="warning")
             self._result = None
             self._ranked_by_id = {}
             self._queue_rows = []
-            queue = self.query_one("#queue", DataTable)
-            queue.clear(columns=False)
-            self._show_stepper()
-            self._set_queue_title(None)
-            self._set_connection(
-                "connected" if self._subject is not None else "disconnected"
-            )
-            if self._subject is not None:
-                self._info("info_window", *self._window(self._subject))
+            self.query_one("#queue", DataTable).clear()
+            self._set_connection("connected" if self._subject is not None else "disconnected")
+            self._show_hero("ready" if self._subject is not None else "welcome")
+            self._set_queue_header(None)
+            self._refresh_brief()
+            self._sync_flow()
             return
 
         self._result = result
         self._set_connection("connected")
-        self._info("info_window", *self._window(self._subject))
         ranked = result.decision_result.ranked_tasks
         self._ranked_by_id = {item.task_id: item for item in ranked}
-
-        queue = self.query_one("#queue", DataTable)
-        queue.clear(columns=False)
         self._queue_rows = [item.task_id for item in ranked]
-        for item in ranked:
-            rank_style = f"bold {ACCENT}" if item.rank <= 3 else f"bold {DIM}"
-            score_style = (
-                f"bold {ACCENT}"
-                if (item.total_score or 0) >= 75
-                else (TEXT if item.total_score is not None else WARN)
-            )
-            queue.add_row(
-                Text(f"#{item.rank}", style=rank_style),
-                Text(
-                    str(item.task_name[:38]),
-                    style=f"bold {TEXT}" if item.rank <= 3 else TEXT,
-                ),
-                Text(self._fmt(item.total_score, "{:.1f}"), style=score_style),
-                Text(self._fmt(item.schedule_pressure, "{:.3f}"), style=DIM),
-                Text(self._fmt(item.successor_impact, "{:.3f}"), style=DIM),
-                Text(self._fmt(item.consequence_of_delay, "{:.3f}"), style=DIM),
-                self._styled_flags(item),
-                key=item.task_id,
-            )
-        self._panel_message = None
-        self._refresh_queue_state()
+        self._fill_queue(ranked)
 
         review = result.decision_review
-        needing_review = len(review.tasks_needing_review)
-        self._metric(
-            "m_candidates",
-            "CANDIDATES",
-            str(review.candidate_count),
-            self._period_label(result),
-            BLUE,
-        )
-        self._metric(
-            "m_review",
-            "NEEDS REVIEW",
-            str(needing_review),
-            "reasons in queue + flags",
-            WARN if needing_review > 0 else GOOD,
-        )
+        needing = len(review.tasks_needing_review)
+        self._metric("m_candidates", "CANDIDATES", str(review.candidate_count), self._period_label(result), "info")
+        self._metric("m_review", "NEEDS REVIEW", str(needing), "reasons in the queue header",
+                     "warn" if needing > 0 else "good")
         conflicts = len(result.conflict_analysis.conflicts)
-        self._metric(
-            "m_flags",
-            "RESOURCE FLAGS",
-            str(conflicts),
-            "shared-resource clashes",
-            BLUE if conflicts > 0 else GOOD,
-        )
-        self._set_queue_title(result)
-        self._bottom_note(
-            Text(" FLAGS LEGEND:  ", style=f"bold {FAINT}")
-            .append("C", style=f"bold {ERROR}")
-            .append(" critical path  ·  ", style=FAINT)
-            .append("R", style=f"bold {BLUE}")
-            .append(" resource conflict  ·  ", style=FAINT)
-            .append("V", style=f"bold {WARN}")
-            .append(" needs review  ·  ", style=FAINT)
-            .append("D", style=f"bold {DIM}")
-            .append(" missing data", style=FAINT)
-        )
+        self._metric("m_flags", "RESOURCE FLAGS", str(conflicts), "shared-resource clashes",
+                     "info" if conflicts > 0 else "good")
+        self._set_queue_header(result)
+        self._set_note("legend")
         self._render_schedule_from_result(result)
+        self._show_hero("ready")
+        self._refresh_brief()
+        self._sync_flow()
         if ranked:
+            queue = self.query_one("#queue", DataTable)
             queue.focus()
+            queue.move_cursor(row=0)
             self._render_inspector(ranked[0].task_id)
-        self.notify(
-            f"Analysis complete — {len(ranked)} activities ranked "
-            f"({'LIVE JEV' if self._mode == bridge.LIVE_MODE else 'offline provisional'})."
-        )
+        self.notify(f"Analysis complete — {len(ranked)} activities ranked "
+                    f"({'LIVE JEV' if self._mode == bridge.LIVE_MODE else 'offline provisional'}).")
 
-    def _ns_stale_for(self, result: DecisionPipelineResult) -> bool:
-        return result_is_stale(self._subject, result)
-
-    # -- helpers for rendering results -----------------------------------------
+    # -- result rendering ---------------------------------------------------------------------------------------
 
     @staticmethod
     def _fmt(value, pattern) -> str:
@@ -1108,369 +778,128 @@ class DecisionTUI(App[None]):
             return {}
         if isinstance(evaluations, dict):
             return dict(evaluations)
-        return {evaluation.task_id: evaluation for evaluation in evaluations}
-
-    @staticmethod
-    def _flags_of(ranked) -> str:
-        parts: list[str] = []
-        if ranked.is_critical is True:
-            parts.append("C")
-        if ranked.resource_warning:
-            parts.append("R")
-        if ranked.needs_review:
-            parts.append("V")
-        if ranked.total_slack_days is None:
-            parts.append("D")
-        return " ".join(parts)
-
-    @staticmethod
-    def _styled_flags(ranked) -> Text:
-        """Render each flag letter with its own distinct semantic color."""
-        out = Text()
-        tokens: list[tuple[str, str]] = []
-        if ranked.is_critical is True:
-            tokens.append(("C", f"bold {ERROR}"))
-        if ranked.resource_warning:
-            tokens.append(("R", f"bold {BLUE}"))
-        if ranked.needs_review:
-            tokens.append(("V", f"bold {WARN}"))
-        if ranked.total_slack_days is None:
-            tokens.append(("D", f"bold {FAINT}"))
-        for idx, (letter, style) in enumerate(tokens):
-            if idx > 0:
-                out.append(" ")
-            out.append(letter, style=style)
-        return out
-
-    @staticmethod
-    def _flag_color(ranked) -> str:
-        if ranked.resource_warning:
-            return BLUE
-        if ranked.needs_review:
-            return WARN
-        return DIM
+        return {e.task_id: e for e in evaluations}
 
     def _period_label(self, result: DecisionPipelineResult) -> str:
         period = result.decision_result.planning_period
         return f"{period.start_date.isoformat()} → {period.end_date.isoformat()}"
 
-    def _set_queue_title(self, result: DecisionPipelineResult | None) -> None:
-        title = self.query_one("#queue_title", Label)
+    def _flags(self, P, ranked) -> Text:
+        out = Text()
+        tokens = []
+        if ranked.is_critical is True:
+            tokens.append(("C", P.bad))
+        if ranked.resource_warning:
+            tokens.append(("R", P.info))
+        if ranked.needs_review:
+            tokens.append(("V", P.warn))
+        if ranked.total_slack_days is None:
+            tokens.append(("D", P.faint))
+        for i, (letter, color) in enumerate(tokens):
+            out.append((" " if i else "") + letter, style=f"bold {color}")
+        return out
+
+    def _fill_queue(self, ranked) -> None:
+        P = pal(self)
+        queue = self.query_one("#queue", DataTable)
+        cursor = queue.cursor_row
+        queue.clear()
+        for item in ranked:
+            top = item.rank <= 3
+            score = item.total_score
+            index = Text(
+                self._fmt(score, "{:.1f}"), justify="right",
+                style=f"bold {P.accent}" if top else (P.ink if score is not None else P.warn),
+            )
+
+            def crit(value, hot):
+                style = hot if value is not None and value >= 0.67 else P.dim
+                return Text(self._fmt(value, "{:.2f}"), style=style, justify="right")
+
+            cells = [
+                Text(f"{item.rank}", style=f"bold {P.accent if top else P.faint}", justify="right"),
+                Text(str(item.task_name)[:60], style=f"bold {P.ink}" if top else P.ink, no_wrap=True),
+                index,
+            ]
+            if not self._narrow:
+                cells += [
+                    crit(item.schedule_pressure, P.bad),
+                    crit(item.successor_impact, P.info),
+                    crit(item.consequence_of_delay, P.warn if item.consequence_of_delay == 0.5 else P.violet),
+                ]
+            cells.append(self._flags(P, item))
+            queue.add_row(*cells, key=item.task_id)
+        self._queue_rows = [item.task_id for item in ranked]
+        self._refresh_main()
+        if ranked:
+            queue.move_cursor(row=min(max(cursor, 0), len(ranked) - 1))
+
+    def _set_queue_header(self, result: DecisionPipelineResult | None) -> None:
+        head = self.query_one("#qhead", QueueHeader)
         if result is None:
-            title.update("▸  PRIORITY QUEUE")
+            head.status, head.pieces, head.stale, head.count = None, [], False, None
+            head.refresh()
             return
         review = result.decision_review
-        label = {
-            ReviewStatus.READY: "READY",
-            ReviewStatus.REVIEW_REQUIRED: "REVIEW REQUIRED",
-            ReviewStatus.INVALID: "INVALID",
-        }.get(review.status, review.status.value.upper())
+        label, role = {
+            ReviewStatus.READY: ("READY", "good"),
+            ReviewStatus.REVIEW_REQUIRED: ("REVIEW REQUIRED", "warn"),
+            ReviewStatus.INVALID: ("INVALID", "bad"),
+        }.get(review.status, (review.status.value.upper(), "warn"))
         pieces = []
         for key, short in (
-            ("provisional_consequence", "provisional"),
-            ("resource_conflict", "conflict"),
-            ("missing_schedule_data", "no-data"),
-            ("low_consequence_confidence", "low-conf"),
+            ("provisional_consequence", "provisional"), ("resource_conflict", "conflict"),
+            ("missing_schedule_data", "no-data"), ("low_consequence_confidence", "low-conf"),
             ("consequence_evaluation_failed", "jev-failed"),
-            ("consequence_evaluation_unavailable", "jev-n/a"),
-            ("unscored_candidate", "unscored"),
+            ("consequence_evaluation_unavailable", "jev-n/a"), ("unscored_candidate", "unscored"),
         ):
             count = review.review_reason_counts.get(key)
             if count:
-                pieces.append(f"{short}: {count}")
-        suffix = ("   │   " + " · ".join(pieces)) if pieces else ""
-        prefix = "⚠ STALE (press [A])  ·  " if self._ns_stale() else ""
-        status_style = (
-            f"bold {GOOD}" if review.status is ReviewStatus.READY else f"bold {WARN}"
-        )
-        header = Text.assemble(
-            (f"{prefix}▸  PRIORITY QUEUE  —  ", f"bold {ACCENT}"),
-            (f"● {label}", status_style),
-        )
-        if suffix:
-            header.append(suffix, style=DIM)
-        title.update(header)
+                pieces.append(f"{count} {short}")
+        head.status, head.pieces = (label, role), pieces
+        head.stale = self._ns_stale()
+        head.count = len(result.decision_result.ranked_tasks)
+        head.refresh()
 
-    # -- timeline --------------------------------------------------------------
+    # -- timeline -------------------------------------------------------------------------------------------------------
 
     def _render_schedule_draft(self, state: ProjectState) -> None:
+        timeline = self.query_one("#timeline", Timeline)
         start, finish = bridge.suggest_period_bounds(state)
         if start is None or finish is None:
-            self.query_one("#timeline", TimelineChart).update(
-                Text(" ▸ TIMELINE — no dated activities reported yet", style=DIM)
-            )
+            timeline.set_empty("no dated activities reported yet")
             return
-        dated = [t for t in state.tasks if t.start is not None and t.finish is not None]
-        dated.sort(key=lambda t: (t.start, t.finish, t.id))
-        subset = dated[:8]
-        chart = self.query_one("#timeline", TimelineChart)
-        chart.render_schedule(
-            labels=[task.name for task in subset],
-            starts=[task.start for task in subset],
-            finishes=[task.finish for task in subset],
-            window_start=start,
-            window_end=finish,
-            completed=[task.progress >= 1.0 for task in subset],
-            progress=[task.progress for task in subset],
-            today=state.status_date or state.captured_at.date(),
-            title="TIMELINE — draft schedule (candidates fill this after analysis)",
+        dated = sorted((t for t in state.tasks if t.start is not None and t.finish is not None),
+                       key=lambda t: (t.start, t.finish, t.id))[:8]
+        timeline.render_schedule(
+            labels=[t.name for t in dated], starts=[t.start for t in dated], finishes=[t.finish for t in dated],
+            window_start=start, window_end=finish, completed=[t.progress >= 1.0 for t in dated],
+            progress=[t.progress for t in dated], today=state.status_date or state.captured_at.date(),
+            title="TIMELINE — draft schedule",
         )
 
     def _render_schedule_from_result(self, result: DecisionPipelineResult) -> None:
         state = self._subject.project_state
         period = result.decision_result.planning_period
-        ranked = result.decision_result.ranked_tasks
-        tasks_by_id = {task.id: task for task in state.tasks}
-        rows = [item for item in ranked if item.task_id in tasks_by_id]
-        subset = rows[:8]
-        chart = self.query_one("#timeline", TimelineChart)
-        labels, starts, finishes, completed, progress = [], [], [], [], []
-        for item in subset:
-            task = tasks_by_id[item.task_id]
-            labels.append(f"#{item.rank:<2} {task.name}")
-            starts.append(task.start)
-            finishes.append(task.finish)
-            completed.append(task.progress >= 1.0)
-            progress.append(task.progress)
-        chart.render_schedule(
-            labels=labels,
-            starts=starts,
-            finishes=finishes,
-            window_start=period.start_date,
-            window_end=period.end_date,
-            completed=completed,
-            progress=progress,
-            today=state.status_date or state.captured_at.date(),
-            title="TIMELINE — top candidates (rank order)",
+        tasks = {t.id: t for t in state.tasks}
+        subset = [r for r in result.decision_result.ranked_tasks if r.task_id in tasks][:8]
+        self.query_one("#timeline", Timeline).render_schedule(
+            labels=[f"#{r.rank:<2} {tasks[r.task_id].name}" for r in subset],
+            starts=[tasks[r.task_id].start for r in subset], finishes=[tasks[r.task_id].finish for r in subset],
+            window_start=period.start_date, window_end=period.end_date,
+            completed=[tasks[r.task_id].progress >= 1.0 for r in subset],
+            progress=[tasks[r.task_id].progress for r in subset],
+            today=state.status_date or state.captured_at.date(), title="TIMELINE — top candidates",
         )
 
-    # -- inspector -------------------------------------------------------------
-
-    def _pressure_word(self, value: float | None) -> tuple[str, str | None]:
-        if value is None:
-            return "unknown — no slack data was reported", WARN
-        if value >= 2 / 3:
-            return f"high (SP {value:.3f})", ERROR
-        if value >= 1 / 3:
-            return f"moderate (SP {value:.3f})", WARN
-        return f"low (SP {value:.3f})", DIM
+    # -- inspector ----------------------------------------------------------------------------------------------------------
 
     def _render_inspector(self, task_id: str) -> None:
         ranked = self._ranked_by_id.get(task_id)
         if ranked is None or self._subject is None:
             return
-        state = self._subject.project_state
-        tasks_by_id = {task.id: task for task in state.tasks}
-        task = tasks_by_id.get(task_id)
-        evaluation = self._evaluation_index(self._result).get(task_id)
-
-        title = self.query_one("#insp_title", Label)
-        title.update(
-            Text.assemble(
-                (f"#{ranked.rank} ", f"bold {ACCENT}"),
-                (f"{ranked.task_name}", f"bold {TEXT}"),
-            )
-        )
-
-        score_line = self.query_one("#insp_score", Label)
-        unscored = ranked.score is None
-
-        signals = Text()
-        proportion_word, proportion_color = self._pressure_word(
-            ranked.schedule_pressure
-        )
-        signals.append(" ▲ ", style=f"bold {proportion_color}")
-        signals.append(
-            f"Schedule pressure is {proportion_word}\n", style=proportion_color
-        )
-
-        if ranked.successor_count is None:
-            signals.append(" ↳ ", style=f"bold {WARN}")
-            signals.append(
-                "Successor impact unknown — flagged for review\n", style=WARN
-            )
-        elif ranked.successor_count > 0:
-            signals.append(" ↳ ", style=f"bold {WARN}")
-            signals.append(
-                f"{ranked.successor_count} downstream activities depend on this\n",
-                style=WARN,
-            )
-        else:
-            signals.append(" ↳ ", style=f"bold {DIM}")
-            signals.append("No downstream dependencies\n", style=DIM)
-
-        if ranked.consequence_source == "evaluated":
-            confidence = (
-                f" (confidence {evaluation.confidence:.2f})"
-                if evaluation is not None and evaluation.confidence is not None
-                else ""
-            )
-            signals.append(" ◆ ", style=f"bold {GOOD}")
-            signals.append(
-                f"Consequence evaluated by LIVE JEV{confidence}\n", style=GOOD
-            )
-        else:
-            signals.append(" ◇ ", style=f"bold {WARN}")
-            signals.append(
-                "Consequence PROVISIONAL 0.500 — not a live JEV result\n",
-                style=WARN,
-            )
-        if (
-            not unscored
-            and ranked.score_range is not None
-            and ranked.score_range.minimum != ranked.score_range.maximum
-        ):
-            signals.append(
-                f"   └─ score sensitivity range: {ranked.score_range.minimum:.1f} – "
-                f"{ranked.score_range.maximum:.1f}\n",
-                style=FAINT,
-            )
-
-        if ranked.resource_warning:
-            signals.append(" ⚑ ", style=f"bold {BLUE}")
-            signals.append(
-                "Shared resource: " + ", ".join(ranked.shared_resource_names) + "\n",
-                style=BLUE,
-            )
-        elif self._result is not None:
-            signals.append(" ✓ ", style=f"bold {DIM}")
-            signals.append("No resource conflict in this session\n", style=DIM)
-        else:
-            signals.append(" · ", style=f"bold {FAINT}")
-            signals.append("No analysis yet\n", style=FAINT)
-
-        if ranked.total_slack_days is None:
-            signals.append(" ▲ ", style=f"bold {WARN}")
-            signals.append("Missing schedule data — flagged for review\n", style=WARN)
-
-        self.query_one("#insp_signals", Static).update(signals)
-
-        # score breakdown bars
-        if unscored:
-            for widget_id in ("insp_sp", "insp_si", "insp_cd"):
-                self.query_one(f"#{widget_id}", ScoreBarRow).set_criterion(
-                    "—", None, None
-                )
-        else:
-            sp, si, cd = ranked.criterion_contributions
-            self.query_one("#insp_sp", ScoreBarRow).set_criterion(
-                "SP", ranked.schedule_pressure, sp
-            )
-            self.query_one("#insp_si", ScoreBarRow).set_criterion(
-                "SI", ranked.successor_impact, si
-            )
-            self.query_one("#insp_cd", ScoreBarRow).set_criterion(
-                "CD", ranked.consequence_of_delay, cd
-            )
-
-        # score headline
-        if unscored:
-            score_line.update(
-                Text(" ⚠ unscored — missing schedule data", style=f"bold {WARN}")
-            )
-        else:
-            headline = Text()
-            headline.append("Priority Index  ", style=DIM)
-            headline.append(f"{ranked.total_score:.1f}", style=f"bold {ACCENT}")
-            headline.append(" / 100", style=FAINT)
-            score_line.update(headline)
-
-        # facts (+ notes)
-        facts = Text()
-        if task is not None:
-            progress_pct = f"{task.progress * 100:.0f}%"
-            status_val = (
-                "completed"
-                if task.progress >= 1.0
-                else (
-                    f"in progress ({progress_pct})"
-                    if task.progress > 0
-                    else "not started"
-                )
-            )
-            slack_val = (
-                f"{ranked.total_slack_days:.1f} wd"
-                if ranked.total_slack_days is not None
-                else "unknown"
-            )
-            crit_val = {True: "yes (critical)", False: "no"}.get(
-                ranked.is_critical, "not reported"
-            )
-            succ_val = (
-                str(ranked.successor_count)
-                if ranked.successor_count is not None
-                else "unknown"
-            )
-
-            facts.append(" STATUS     ", style=f"bold {FAINT}")
-            facts.append(f"{status_val:<18}", style=TEXT)
-            facts.append(" SLACK      ", style=f"bold {FAINT}")
-            facts.append(f"{slack_val}\n", style=TEXT)
-
-            facts.append(" CRITICAL   ", style=f"bold {FAINT}")
-            facts.append(
-                f"{crit_val:<18}",
-                style=ERROR if ranked.is_critical else DIM,
-            )
-            facts.append(" SUCCESSORS ", style=f"bold {FAINT}")
-            facts.append(f"{succ_val}\n", style=TEXT)
-
-            facts.append(" DATES      ", style=f"bold {FAINT}")
-            if task.start is not None and task.finish is not None:
-                facts.append(
-                    f"{task.start.isoformat()} → {task.finish.isoformat()} "
-                    f"({task.duration_days:.1f}d)",
-                    style=DIM,
-                )
-            else:
-                facts.append("—", style=DIM)
-        else:
-            facts.append(" The activity row is not in the loaded snapshot.", style=WARN)
-        self.query_one("#insp_facts", Static).update(facts)
-
-        notes = Text()
-        task_notes = (task.notes if task is not None else None) or None
-        if task_notes:
-            label = task_notes.strip()
-            notes.append(" NOTES: ", style=f"bold {FAINT}")
-            notes.append((label[:110] + "…") if len(label) > 110 else label, style=DIM)
-        else:
-            notes.append(" NOTES: none", style=FAINT)
-        self.query_one("#insp_notes", Static).update(notes)
-
-        # contextual next action
-        next_action = Text()
-        if unscored:
-            next_action.append(
-                "Restore the missing schedule data in Microsoft Project and "
-                "press [R] to re-capture; the activity stays unscored until then.",
-                style=WARN,
-            )
-        else:
-            actions = []
-            if ranked.resource_warning:
-                actions.append(
-                    "Coordinate shared resource ("
-                    + ", ".join(ranked.shared_resource_names)
-                    + ") before committing this window"
-                )
-            if ranked.consequence_source != "evaluated":
-                if self._mode == bridge.OFFLINE_MODE:
-                    actions.append(
-                        "Press [J] then [A] to evaluate consequence live, "
-                        "or validate provisional 0.5 with the team"
-                    )
-                else:
-                    actions.append(
-                        "Consequence could not be evaluated (e.g. no notes) — "
-                        "validate provisional value with the team"
-                    )
-            if ranked.review_reasons:
-                actions.append("Clear review flags before acting on it")
-            if not actions:
-                actions.append(
-                    "Use this ranking position in the period decision; no "
-                    "review items are attached"
-                )
-            next_action.append(" · ".join(actions[:2]) + ".", style=TEXT)
-        self.query_one("#insp_next", Static).update(next_action)
+        task = {t.id: t for t in self._subject.project_state.tasks}.get(task_id)
+        evaluation = self._evaluation_index(self._result).get(task_id) if self._result is not None else None
+        inspector = self.query_one("#inspector", Inspector)
+        inspector.show(ranked, task, evaluation, self._result is not None, self._mode == bridge.OFFLINE_MODE)
+        self.query_one("#right").scroll_home(animate=False)

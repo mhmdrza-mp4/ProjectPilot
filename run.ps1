@@ -220,15 +220,27 @@ if ($script:UseVT) {
 }
 
 if ($env:WT_SESSION -and $script:UseVT) {
-    # a single dot orbiting the cell (eight frames)
-    $SpinFrames = @(0x2801,0x2802,0x2804,0x2840,0x2880,0x2820,0x2810,0x2808) |
-                  ForEach-Object { [string][char]$_ }
-    # equalizer bars, low to high
-    $EqFrames = @(0x2581,0x2582,0x2583,0x2584,0x2585,0x2586,0x2587,0x2588) |
-                ForEach-Object { [string][char]$_ }
+    # A real rotating ring: two braille cells form a 4x4 dot grid, and a bright comet
+    # (head + 3 trailing dots) runs around the 12 dots of its outline, clockwise.
+    $RingPath = @(@(0,0),@(1,0),@(2,0),@(3,0),@(3,1),@(3,2),@(3,3),@(2,3),@(1,3),@(0,3),@(0,2),@(0,1))
+    $DotBits  = @(@(0x01,0x02,0x04,0x40), @(0x08,0x10,0x20,0x80))   # [column in cell][row]
+    $SpinFrames = @()
+    for ($rs = 0; $rs -lt $RingPath.Count; $rs++) {
+        $mask = @(0, 0)
+        for ($rt = 0; $rt -lt 4; $rt++) {
+            $dot  = $RingPath[($rs - $rt + $RingPath.Count) % $RingPath.Count]
+            $cell = [int][Math]::Floor($dot[0] / 2)
+            $mask[$cell] = $mask[$cell] -bor $DotBits[$dot[0] % 2][$dot[1]]
+        }
+        $SpinFrames += (([string][char](0x2800 + $mask[0])) + ([string][char](0x2800 + $mask[1])))
+    }
 } else {
-    $SpinFrames = @('|','/','-','\')
-    $EqFrames   = @('.',':','-','=','+','*','#','@')
+    # Any console font draws half blocks, so even the old console gets a rotating loader:
+    # a block (growing to two, then shrinking) runs clockwise around a 2x2 track.
+    $hu = [string][char]0x2580   # upper half block
+    $hl = [string][char]0x2584   # lower half block
+    $hf = [string][char]0x2588   # full block
+    $SpinFrames = @(($hu + ' '), ($hu + $hu), (' ' + $hu), (' ' + $hf), (' ' + $hl), ($hl + $hl), ($hl + ' '), ($hf + ' '))
 }
 
 # ---------------------------------------------------------------------------
@@ -690,7 +702,6 @@ $script:RibbonFill    = $null                                         # cached "
 $script:RibbonEmpty   = ''
 $script:BlendCache    = @{}                                           # (cell, highlight level) -> escape sequence
 $script:ScanCache     = @{}
-$script:EqSeq         = $null
 $script:PulseCenter   = $null              # Set while the final ribbon pulse plays
 
 function Recompute-Goal {
@@ -819,27 +830,6 @@ function Render-RibbonLine([int]$width, [double]$fill, [double]$tick) {
 }
 
 # Equalizer-style loader: a row of bars that rise and fall out of phase (a different phase per step)
-function Get-EqBars([int]$cells, [double]$tick, [int]$seed) {
-    if (($null -eq $script:EqSeq) -or ($script:EqSeq.Count -ne $cells)) {
-        $script:EqSeq = New-Object 'string[]' $cells
-        for ($i = 0; $i -lt $cells; $i++) {
-            $script:EqSeq[$i] = (Get-GradANSI ($i / [double]([Math]::Max($cells - 1, 1))))
-        }
-    }
-    $sb = New-Object System.Text.StringBuilder
-    $levels = $EqFrames.Count
-    $t = $tick * 0.55
-    for ($i = 0; $i -lt $cells; $i++) {
-        $a = [Math]::Sin($t + ($i * 0.85) + $seed)
-        $b = [Math]::Sin(($t * 0.37) - ($i * 1.7) + ($seed * 1.9))
-        $h = ((($a * 0.65) + ($b * 0.35)) + 1.0) * 0.5
-        $lv = [int][Math]::Floor($h * ($levels - 0.001))
-        [void]$sb.Append($script:EqSeq[$i]).Append($EqFrames[$lv])
-    }
-    [void]$sb.Append("$ESC[0m")
-    return $sb.ToString()
-}
-
 function Render-TaskRow($task, [int]$width, [double]$tick) {
     # Layout: "   G  label(25)  [equalizer(8)]  detail(right-aligned)  time(7)"
     $state = $task.State
@@ -864,7 +854,8 @@ function Render-TaskRow($task, [int]$width, [double]$tick) {
             $tCol  = $C_Dim
         }
         'running' {
-            $si    = ([int][Math]::Floor($tick * 0.6) + [int]$task.Idx) % $SpinFrames.Count
+            $spd   = 0.06 * $SpinFrames.Count   # one full turn in about 0.85 s for any frame count
+            $si    = ([int][Math]::Floor($tick * $spd) + [int]$task.Idx) % $SpinFrames.Count
             $glyph = $SpinFrames[$si]
             $wave  = ([Math]::Sin(($tick * 0.25) + $task.Idx) + 1.0) * 0.5
             $gCol  = Get-GradRGB $wave
@@ -924,21 +915,17 @@ function Render-TaskRow($task, [int]$width, [double]$tick) {
     # 3 + 1 (glyph) + 2 + 25 (label) + 2 = 33 fixed cols before the detail field
     $availRight = [Math]::Max($width - 33, 20)
     $detailW    = $availRight - ($timeW + 2)
-    $eqStr      = ''
-    if (($state -eq 'running') -and ($detailW -ge 24)) {
-        $eqStr   = Get-EqBars 8 $tick ([int]$task.Idx)
-        $detailW = $detailW - 10
-    }
     $detailStr  = (Fit-Text $detailText $detailW).PadLeft($detailW)
     $timeStr    = ([string]$timeText).PadLeft($timeW)
 
+    # the status column is two cells wide (the spinner needs both); one-cell icons sit in the second cell
+    if ($glyph.Length -lt 2) { $glyph = " " + $glyph }
     $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append("   ")
+    [void]$sb.Append("  ")
     [void]$sb.Append((Paint $gCol $glyph))
     [void]$sb.Append("  ")
     [void]$sb.Append((Paint $lCol $labelStr))
     [void]$sb.Append("  ")
-    if ($eqStr) { [void]$sb.Append($eqStr).Append("  ") }
 
     if ($state -eq 'pending' -and [string]::IsNullOrEmpty($detailText)) {
         $dots = ($G_Dot * 3).PadLeft($detailW)

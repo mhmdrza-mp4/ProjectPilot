@@ -1,0 +1,49 @@
+name: launcher
+
+on:
+  push:
+    paths:
+      - run.ps1
+      - run.bat
+      - pyproject.toml
+      - constraints.txt
+      - .github/workflows/launcher.yml
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-setup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check before setup (exit code 3 = setup needed, expected on a clean runner)
+        shell: cmd
+        run: run.bat -Check -NoPause
+        continue-on-error: true
+
+      - name: Silent setup and headless self-test
+        shell: cmd
+        run: run.bat -Silent
+
+      - name: Check after setup (must report ready)
+        shell: cmd
+        run: run.bat -Check -NoPause
+
+      - name: Collect diagnostics
+        if: failure()
+        shell: cmd
+        run: run.bat -Diagnose -Silent
+
+      - name: Gather diagnostics ZIP
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory diag -Force | Out-Null
+          Copy-Item "$env:LOCALAPPDATA\ProjectPilot\diagnostics\*.zip" diag -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: projectpilot-diagnostics
+          path: diag

@@ -25,7 +25,8 @@ is never needed):
    higher first;
 2. lower ``total_slack_days`` first (less slack = more urgent when
    scores tie);
-3. higher direct successor count first;
+3. higher DOWNSTREAM count first (every task that transitively depends
+   on it — the same quantity Successor Impact is built on);
 4. higher EVALUATED Consequence of Delay first;
 5. task id ascending (final stable break).
 
@@ -61,6 +62,10 @@ _SCORE_DECIMALS = 1
 class RankedTask:
     """One ranked candidate: rank, the composed score, and display facts.
 
+    ``successor_count`` is the DIRECT successor count (display); the
+    ranking tie-break and the Successor Impact criterion use
+    ``downstream_count`` (direct + indirect).
+
     Composition, not duplication: ``score`` IS the original
     ``TaskPriorityScore`` (None only for an unscored candidate); the
     convenience properties below simply expose its surface for the
@@ -79,6 +84,7 @@ class RankedTask:
     resource_warning: bool
     shared_resource_ids: tuple[str, ...] = ()
     shared_resource_names: tuple[str, ...] = ()
+    downstream_count: int | None = None  # direct + indirect dependents
 
     # -- composed views (no copied data) ------------------------------------
     @property
@@ -205,7 +211,7 @@ def _ordering_key(
     """
     total = score.total_score if score is not None else None
     slack = schedule.total_slack_days if schedule is not None else None
-    successors = schedule.successor_count if schedule is not None else None
+    successors = schedule.downstream_count if schedule is not None else None
     cd_known = (
         score is not None
         and score.consequence_source == "evaluated"
@@ -267,6 +273,7 @@ def _ranked_task(
         score=score,
         total_slack_days=schedule.total_slack_days if schedule is not None else None,
         successor_count=schedule.successor_count if schedule is not None else None,
+        downstream_count=schedule.downstream_count if schedule is not None else None,
         is_critical=schedule.is_critical if schedule is not None else None,
         resource_warning=bool(resource_ids),
         shared_resource_ids=tuple(resource_ids),

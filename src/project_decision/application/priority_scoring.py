@@ -26,9 +26,21 @@ Formulas (documented, deterministic; H = horizon working days):
 - Schedule Pressure   SP = 1 - min(max(slack, 0), H) / H
   negative/zero slack → 1.0; slack >= H → 0.0. ``is_critical`` is
   never used. Missing slack → SP is unavailable, never invented.
-- Successor Impact    SI = min(successor_count, K) / K
-  direct successors only; no candidate-relative normalization: adding
-  or removing other candidates never changes any value.
+- Successor Impact    SI = min(ln(1 + D) / ln(1 + K), 1)
+  D = the task's DOWNSTREAM count: every task that transitively depends
+  on it (direct AND indirect). A task with one successor that unlocks a
+  30-task chain therefore scores far higher than a task whose single
+  successor is a dead end. K is the downstream count at which SI reaches
+  1; by default K = N - 1, the largest D a task can have in this project
+  (N = tasks in the captured state), which normalizes SI to the project:
+  0 = no task waits for it, 1 = every other task waits for it, whatever
+  the project size (intermediate values are not size-invariant: the log
+  shape is deliberately not a plain percentage). An explicit
+  ``ScoringParameters.successor_cap`` replaces K (what-if). The log
+  shape keeps early dependents meaningful and avoids saturating on long
+  chains. No candidate-relative normalization: adding or removing other
+  CANDIDATES (e.g. changing the planning period) never changes any
+  value; only a change of the project's own task set can move K.
 - Consequence         CD in [0, 1] — a validated input, not an output.
 - Score  score = 100 * (w_schedule*SP + w_successor*SI + w_consequence*CD)
 
@@ -48,6 +60,7 @@ Missing data rules (no invented observations, no weight re-normalization):
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -71,7 +84,7 @@ class ScoringParameters:
     re-normalized per task when a criterion is missing.
     """
 
-    successor_cap: int = 5
+    successor_cap: int | None = None  # None = K is N - 1 (project size)
     consequence_max_level: int = 3  # highest input level; read by the future level→CD mapping, not by the formula
     schedule_pressure_weight: float = 0.40
     successor_impact_weight: float = 0.20
@@ -79,8 +92,8 @@ class ScoringParameters:
     horizon: float | None = None
 
     def __post_init__(self) -> None:
-        if self.successor_cap < 1:
-            raise ValueError("successor_cap must be >= 1")
+        if self.successor_cap is not None and self.successor_cap < 1:
+            raise ValueError("successor_cap must be >= 1 (or None for project size)")
         if self.consequence_max_level < 1:
             raise ValueError("consequence_max_level must be >= 1")
         if self.horizon is not None and self.horizon <= 0:
@@ -141,11 +154,18 @@ def schedule_pressure(slack: float | None, horizon: float) -> float | None:
     return 1.0 - min(max(slack, 0.0), horizon) / horizon
 
 
-def successor_impact(successor_count: int | None, cap: int) -> float | None:
-    """SI = min(direct successor count, K)/K; None when unavailable."""
-    if successor_count is None:
+def successor_impact(downstream_count: int | None, cap: int | None) -> float | None:
+    """SI = min(ln(1 + D) / ln(1 + K), 1); None when D or K is unavailable.
+
+    ``downstream_count`` (D) counts direct and indirect successors; ``cap``
+    (K) is the count at which SI reaches 1. K < 1 means no task can wait
+    for another one (a one-task project), so nothing is downstream: 0.0.
+    """
+    if downstream_count is None or cap is None:
         return None
-    return min(successor_count, cap) / cap
+    if cap < 1:
+        return 0.0
+    return min(math.log1p(downstream_count) / math.log1p(cap), 1.0)
 
 
 def _validated_consequence(value: float | None) -> float | None:
@@ -165,6 +185,8 @@ def score_task(
     task_schedule: TaskSchedule | None,
     consequence_of_delay: float | None = None,
     parameters: ScoringParameters | None = None,
+    *,
+    project_task_count: int | None = None,
 ) -> TaskPriorityScore:
     """Score ONE task; deterministic, pure, side-effect free.
 
@@ -172,9 +194,15 @@ def score_task(
     be absent (a state/schedule mismatch) — that is data-quality
     information, never a fabricated schedule. ``consequence_of_delay``
     None means NOT evaluated (the neutral 0.5 is applied and flagged).
+    ``project_task_count`` (N, tasks in the captured state) sets the
+    default successor scale K = N - 1; it is not needed when the
+    parameters carry an explicit ``successor_cap``.
     """
     params = parameters if parameters is not None else ScoringParameters()
     horizon = params.horizon if params.horizon is not None else period.working_days
+    successor_scale = params.successor_cap
+    if successor_scale is None and project_task_count is not None:
+        successor_scale = project_task_count - 1
 
     reasons: list[str] = []
     if task_schedule is None:
@@ -187,7 +215,7 @@ def score_task(
             task_schedule.total_slack_days, horizon
         )
         successor_impact_value = successor_impact(
-            task_schedule.successor_count, params.successor_cap
+            task_schedule.downstream_count, successor_scale
         )
         is_critical = task_schedule.is_critical
         if schedule_pressure_value is None:
@@ -202,7 +230,13 @@ def score_task(
                     "working days (H = 0)"
                 )
         if successor_impact_value is None:
-            reasons.append("successor impact is unavailable: no successor data")
+            if successor_scale is None:
+                reasons.append(
+                    "successor impact is unavailable: the project size is "
+                    "unknown (give project_task_count or successor_cap)"
+                )
+            else:
+                reasons.append("successor impact is unavailable: no successor data")
 
     evaluated_consequence = _validated_consequence(consequence_of_delay)
     provisional = evaluated_consequence is None
@@ -291,6 +325,7 @@ def score_planning_session(
                 task_schedule=schedule_analysis.schedules.get(candidate_id),
                 consequence_of_delay=cd,
                 parameters=parameters,
+                project_task_count=len(schedule_analysis.schedules),
             )
         )
     return tuple(results)

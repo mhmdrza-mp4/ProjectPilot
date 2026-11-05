@@ -164,6 +164,147 @@ class TestSuccessorCalculation:
         assert analysis.schedules["C"].successor_count == 0
 
 
+class TestDownstreamCount:
+    """Direct successors vs everything that transitively waits."""
+
+    def test_chain_counts_indirect_dependents(self):
+        state = make_state(
+            [
+                make_task("A"),
+                make_task("B", dependency_ids=["A"]),
+                make_task("C", dependency_ids=["B"]),
+                make_task("D", dependency_ids=["C"]),
+            ]
+        )
+
+        analysis = analyze_schedule(state)
+
+        # A has ONE direct successor but three tasks wait behind it.
+        assert analysis.schedules["A"].successor_count == 1
+        assert analysis.schedules["A"].downstream_count == 3
+        assert analysis.schedules["B"].downstream_count == 2
+        assert analysis.schedules["C"].downstream_count == 1
+        assert analysis.schedules["D"].downstream_count == 0
+
+    def test_diamond_counts_each_task_once(self):
+        state = make_state(
+            [
+                make_task("A"),
+                make_task("B", dependency_ids=["A"]),
+                make_task("C", dependency_ids=["A"]),
+                make_task("D", dependency_ids=["B", "C"]),
+            ]
+        )
+
+        analysis = analyze_schedule(state)
+
+        assert analysis.schedules["A"].successor_count == 2
+        assert analysis.schedules["A"].downstream_count == 3  # B, C, D (D once)
+
+    def test_shared_tail_is_counted_once_per_start(self):
+        state = make_state(
+            [
+                make_task("A"),
+                make_task("B"),
+                make_task("C", dependency_ids=["A", "B"]),
+                make_task("D", dependency_ids=["C"]),
+            ]
+        )
+
+        analysis = analyze_schedule(state)
+
+        assert analysis.schedules["A"].downstream_count == 2
+        assert analysis.schedules["B"].downstream_count == 2
+
+    def test_task_without_successors_is_zero_not_missing(self):
+        analysis = analyze_schedule(make_state([make_task("A")]))
+
+        assert analysis.schedules["A"].downstream_count == 0
+
+    def test_broken_references_do_not_create_downstream_tasks(self):
+        state = make_state(
+            [make_task("A"), make_task("B", dependency_ids=["A", "NOPE"])]
+        )
+
+        analysis = analyze_schedule(state)
+
+        assert analysis.schedules["A"].downstream_count == 1
+        assert "NOPE" not in analysis.schedules
+
+    def test_long_chain_does_not_hit_the_recursion_limit(self):
+        count = 3000
+        tasks = [make_task("T0")] + [
+            make_task(f"T{i}", dependency_ids=[f"T{i - 1}"]) for i in range(1, count)
+        ]
+
+        analysis = analyze_schedule(make_state(tasks))
+
+        assert analysis.schedules["T0"].downstream_count == count - 1
+        assert analysis.schedules[f"T{count - 1}"].downstream_count == 0
+
+    def test_hand_built_schedule_defaults_to_the_direct_count(self):
+        from project_decision.application.schedule_analysis import TaskSchedule
+
+        schedule = TaskSchedule(
+            task_id="A",
+            successor_ids=("B", "C"),
+            successor_count=2,
+            total_slack_days=0.0,
+            is_critical=None,
+        )
+
+        assert schedule.downstream_count == 2  # documented lower bound
+
+
+class TestDependencyCycles:
+    def test_two_task_cycle_terminates_and_is_reported(self):
+        state = make_state(
+            [
+                make_task("A", dependency_ids=["B"]),
+                make_task("B", dependency_ids=["A"]),
+            ]
+        )
+
+        analysis = analyze_schedule(state)
+
+        # Each is downstream of the other, never of itself.
+        assert analysis.schedules["A"].downstream_count == 1
+        assert analysis.schedules["B"].downstream_count == 1
+        assert "task 'A' is part of a dependency cycle" in analysis.issues
+        assert "task 'B' is part of a dependency cycle" in analysis.issues
+
+    def test_only_tasks_on_the_cycle_are_reported(self):
+        state = make_state(
+            [
+                make_task("START"),
+                make_task("A", dependency_ids=["START", "B"]),
+                make_task("B", dependency_ids=["A"]),
+                make_task("AFTER", dependency_ids=["B"]),
+            ]
+        )
+
+        analysis = analyze_schedule(state)
+
+        cycle_issues = [i for i in analysis.issues if "cycle" in i]
+        assert cycle_issues == [
+            "task 'A' is part of a dependency cycle",
+            "task 'B' is part of a dependency cycle",
+        ]
+        # START feeds the cycle and everything behind it.
+        assert analysis.schedules["START"].downstream_count == 3
+
+    def test_acyclic_state_reports_no_cycle(self):
+        state = make_state([make_task("A"), make_task("B", dependency_ids=["A"])])
+
+        assert not any("cycle" in i for i in analyze_schedule(state).issues)
+
+    def test_self_reference_is_not_a_cycle(self):
+        analysis = analyze_schedule(make_state([make_task("A", dependency_ids=["A"])]))
+
+        assert analysis.schedules["A"].downstream_count == 0
+        assert not any("cycle" in i for i in analysis.issues)
+
+
 class TestScheduleFields:
     def test_normal_task_reports_slack_and_criticality_verbatim(self):
         state = make_state(

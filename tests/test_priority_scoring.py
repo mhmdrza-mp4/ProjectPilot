@@ -44,6 +44,10 @@ def make_state() -> ProjectState:
         resources=[Resource(id="R1", name="Alice")],
     )
 
+# K=15 gives exact round SI values for the log formula:
+# ln(1+D)/ln(16) = 0, 0.25, 0.5, 0.75, 1 for D = 0, 1, 3, 7, 15.
+K15 = ScoringParameters(successor_cap=15)
+
 SCHEDULE = TaskSchedule(
     task_id="A",
     successor_ids=("B",),
@@ -92,18 +96,107 @@ class TestSchedulePressureFormula:
 
 
 class TestSuccessorImpactFormula:
-    def test_k_five_examples(self):
-        for count, expected in [(0, 0.0), (1, 0.2), (3, 0.6), (5, 1.0), (10, 1.0)]:
-            assert successor_impact(count, 5) == pytest.approx(expected)
+    def test_k_fifteen_examples(self):
+        for count, expected in [
+            (0, 0.0), (1, 0.25), (3, 0.5), (7, 0.75), (15, 1.0), (100, 1.0),
+        ]:
+            assert successor_impact(count, 15) == pytest.approx(expected)
+
+    def test_log_shape_early_dependents_matter_most(self):
+        values = [successor_impact(count, 100) for count in range(0, 101)]
+        assert values == sorted(values)  # monotonic
+        # concave: the first dependent adds more than the 50th does.
+        assert values[1] - values[0] > values[51] - values[50]
 
     def test_missing_successor_data_is_none(self):
         assert successor_impact(None, 5) is None
+
+    def test_unknown_scale_is_none_not_a_guess(self):
+        assert successor_impact(3, None) is None
+
+    def test_one_task_project_has_nothing_downstream(self):
+        assert successor_impact(0, 0) == 0.0
+
+    def test_never_exceeds_one(self):
+        assert successor_impact(10_000, 5) == 1.0
+
+
+class TestSuccessorImpactUsesTheDownstreamChain:
+    def test_indirect_dependents_count(self):
+        # Same direct successor (1), very different chains behind it.
+        dead_end = TaskSchedule(
+            task_id="A", successor_ids=("B",), successor_count=1,
+            total_slack_days=0.0, is_critical=False, downstream_count=1,
+        )
+        gate = TaskSchedule(
+            task_id="A", successor_ids=("B",), successor_count=1,
+            total_slack_days=0.0, is_critical=False, downstream_count=7,
+        )
+        low = score_task("A", TWO_WEEKS, dead_end, 0.5, K15)
+        high = score_task("A", TWO_WEEKS, gate, 0.5, K15)
+        assert low.successor_impact == pytest.approx(0.25)
+        assert high.successor_impact == pytest.approx(0.75)
+        assert high.total_score > low.total_score
+
+    def test_default_scale_is_project_size_minus_one(self):
+        # N = 16 tasks -> K = 15, so it matches the explicit K=15 above.
+        schedule = schedule_for(3, 0.0)
+        by_size = score_task("A", TWO_WEEKS, schedule, 0.5, project_task_count=16)
+        by_cap = score_task("A", TWO_WEEKS, schedule, 0.5, K15)
+        assert by_size.successor_impact == pytest.approx(0.5)
+        assert by_size.total_score == pytest.approx(by_cap.total_score)
+
+    def test_everything_waiting_for_the_task_is_one(self):
+        schedule = schedule_for(9, 0.0)  # 9 dependents in a 10-task project
+        score = score_task("A", TWO_WEEKS, schedule, 0.5, project_task_count=10)
+        assert score.successor_impact == pytest.approx(1.0)
+
+    def test_endpoints_are_normalized_to_any_project_size(self):
+        # 0 = nobody waits, 1 = everybody else waits — in a 5-task and in
+        # a 500-task project alike.
+        for size in (5, 50, 500):
+            none_waits = score_task(
+                "A", TWO_WEEKS, schedule_for(0, 0.0), 0.5, project_task_count=size
+            )
+            all_wait = score_task(
+                "A", TWO_WEEKS, schedule_for(size - 1, 0.0), 0.5, project_task_count=size
+            )
+            assert none_waits.successor_impact == pytest.approx(0.0)
+            assert all_wait.successor_impact == pytest.approx(1.0)
+
+    def test_does_not_saturate_on_long_chains(self):
+        # The sample-project situation: chains of 26 / 61 / 86 dependents in
+        # 120 tasks must stay distinguishable (the old direct-count formula
+        # reached its cap at 5 and could not tell them apart).
+        values = [
+            score_task(
+                "A", TWO_WEEKS, schedule_for(d, 0.0), 0.5, project_task_count=120
+            ).successor_impact
+            for d in (26, 61, 86)
+        ]
+        assert values == sorted(values)
+        assert len(set(round(v, 3) for v in values)) == 3
+        assert values[-1] < 1.0
+
+    def test_unknown_project_size_is_flagged_not_guessed(self):
+        score = score_task("A", TWO_WEEKS, schedule_for(3, 0.0), 0.5)
+        assert score.successor_impact is None
+        assert score.total_score is None
+        assert score.needs_review
+        assert any("project size" in reason for reason in score.review_reasons)
+
+    def test_cap_is_not_changed_by_candidates(self):
+        # Changing the planning period (different candidates) cannot move
+        # SI: it depends on the task's chain and the project size only.
+        a = score_task("A", WEEK, schedule_for(3, 0.0), 0.5, project_task_count=40)
+        b = score_task("A", TWO_WEEKS, schedule_for(3, 0.0), 0.5, project_task_count=40)
+        assert a.successor_impact == pytest.approx(b.successor_impact)
 
 
 class TestConsequenceInput:
     def test_valid_values_accepted_unchanged(self):
         for value in [0.0, 1 / 3, 2 / 3, 1.0]:
-            score = score_task("A", WEEK, SCHEDULE, consequence_of_delay=value)
+            score = score_task("A", WEEK, SCHEDULE, consequence_of_delay=value, parameters=K15)
             assert score.consequence_of_delay == pytest.approx(value)
             assert score.consequence_source == "evaluated"
             assert not score.needs_review
@@ -123,7 +216,7 @@ class TestConsequenceInput:
 class TestScoringParameters:
     def test_documented_defaults(self):
         p = ScoringParameters()
-        assert p.successor_cap == 5
+        assert p.successor_cap is None  # None = project size (N - 1)
         assert p.consequence_max_level == 3
         assert p.schedule_pressure_weight == pytest.approx(0.40)
         assert p.successor_impact_weight == pytest.approx(0.20)
@@ -157,6 +250,8 @@ class TestScoringParameters:
     def test_misc_validation(self):
         with pytest.raises(ValueError, match="successor_cap"):
             ScoringParameters(successor_cap=0)
+        with pytest.raises(ValueError, match="successor_cap"):
+            ScoringParameters(successor_cap=0)
         with pytest.raises(ValueError, match="consequence_max_level"):
             ScoringParameters(consequence_max_level=0)
         with pytest.raises(ValueError, match="horizon"):
@@ -166,14 +261,13 @@ class TestScoringParameters:
 class TestWeightedScore:
     def test_documented_example_equal_seventy(self):
         # SP=1, SI=0.5, CD=0.5 => 100*(0.4 + 0.1 + 0.2) = 70.
-        # SI=0.5 with three successors needs K=6 (the example's SI value
-        # is a criterion value, not bound to the default cap).
+        # SI=0.5 comes from three downstream tasks with K=15.
         score = score_task(
             "A",
             TWO_WEEKS,
             schedule_for(3, 0.0),
             consequence_of_delay=0.5,
-            parameters=ScoringParameters(successor_cap=6),
+            parameters=K15,
         )
         assert score.successor_impact == pytest.approx(0.5)
         assert score.total_score == pytest.approx(70.0)
@@ -181,8 +275,8 @@ class TestWeightedScore:
         assert not score.needs_review
 
     def test_extreme_values(self):
-        all_low = score_task("A", TWO_WEEKS, schedule_for(0, 100.0), 0.0)
-        all_high = score_task("A", TWO_WEEKS, schedule_for(10, 0.0), 1.0)
+        all_low = score_task("A", TWO_WEEKS, schedule_for(0, 100.0), 0.0, K15)
+        all_high = score_task("A", TWO_WEEKS, schedule_for(15, 0.0), 1.0, K15)
         assert all_low.total_score == pytest.approx(0.0)
         assert all_high.total_score == pytest.approx(100.0)
 
@@ -193,7 +287,8 @@ class TestContributions:
             (-5.0, 2, 0.0), (0.0, 0, 1.0), (2.0, 4, 0.5), (1.0, 1, 1 / 3),
         ]:
             score = score_task(
-                "A", TWO_WEEKS, schedule_for(successors, slack), consequence_of_delay=cd
+                "A", TWO_WEEKS, schedule_for(successors, slack),
+                consequence_of_delay=cd, parameters=K15,
             )
             contributions = (
                 score.schedule_contribution
@@ -205,7 +300,8 @@ class TestContributions:
     def test_weights_are_not_renormalized_when_a_criterion_is_missing(self):
         # Slack missing: successor + consequence still use their FULL weights.
         score = score_task(
-            "A", TWO_WEEKS, schedule_for(5, None), consequence_of_delay=1.0
+            "A", TWO_WEEKS, schedule_for(15, None), consequence_of_delay=1.0,
+            parameters=K15,
         )
         assert score.total_score is None
         assert score.schedule_pressure is None
@@ -224,13 +320,16 @@ class TestMissingConsequence:
         assert any("not evaluated" in reason for reason in score.review_reasons)
 
     def test_score_range_from_cd_zero_to_one(self):
-        score = score_task("A", TWO_WEEKS, schedule_for(3, 0.0), consequence_of_delay=None)
+        score = score_task(
+            "A", TWO_WEEKS, schedule_for(3, 0.0), consequence_of_delay=None,
+            parameters=K15,
+        )
 
-        # fixed = 100*(0.4*1 + 0.2*0.6) = 52 => range 52..92; CD=0.5 gives 72.
-        assert score.total_score == pytest.approx(72.0)
+        # fixed = 100*(0.4*1 + 0.2*0.5) = 50 => range 50..90; CD=0.5 gives 70.
+        assert score.total_score == pytest.approx(70.0)
         assert score.score_range is not None
-        assert score.score_range.minimum == pytest.approx(52.0)
-        assert score.score_range.maximum == pytest.approx(92.0)
+        assert score.score_range.minimum == pytest.approx(50.0)
+        assert score.score_range.maximum == pytest.approx(90.0)
 
     def test_range_not_claimed_when_other_criteria_missing(self):
         # Without a base score, a CD range would be misleading.
@@ -272,16 +371,17 @@ class TestMissingScheduleData:
 class TestCriticalityHasNoNumericEffect:
     @pytest.mark.parametrize("critical", [False, True])
     def test_only_displays_never_scores(self, critical):
-        # SP=1 (slack 0), SI=0.6 (3 successors), CD=0.5 -> 72. The only
-        # thing asserted is that BOTH criticality values give the same
-        # number (criticality is display-only).
+        # SP=1 (slack 0), SI=0.5 (3 downstream, K=15), CD=0.5 -> 70. The
+        # only thing asserted is that BOTH criticality values give the
+        # same number (criticality is display-only).
         score = score_task(
             "A",
             TWO_WEEKS,
             schedule_for(3, 0.0, critical=critical),
             consequence_of_delay=0.5,
+            parameters=K15,
         )
-        assert score.total_score == pytest.approx(72.0)
+        assert score.total_score == pytest.approx(70.0)
         assert score.is_critical is critical
 
 

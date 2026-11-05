@@ -197,7 +197,32 @@ class TestOrderingRules:
 
         result = create_decision_result(session, state, analysis, scores)
 
-        assert rank_ids(result) == ["A", "B"]  # more direct successors first
+        assert rank_ids(result) == ["A", "B"]  # more successors first
+
+    def test_downstream_chain_beats_direct_count_in_the_tiebreak(self):
+        # B has fewer DIRECT successors but a much longer chain behind it.
+        def with_chain(task_id, direct, downstream):
+            return TaskSchedule(
+                task_id=task_id,
+                successor_ids=tuple(f"{task_id}{i}" for i in range(direct)),
+                successor_count=direct,
+                total_slack_days=2.0,
+                is_critical=False,
+                downstream_count=downstream,
+            )
+
+        state, session, analysis, scores = simple_fixture(
+            ("A", "B"),
+            {"A": with_chain("A", 3, 3), "B": with_chain("B", 1, 9)},
+            [scored("A", total=70.0), scored("B", total=70.0)],
+        )
+
+        result = create_decision_result(session, state, analysis, scores)
+
+        assert rank_ids(result) == ["B", "A"]
+        by_id = {ranked.task_id: ranked for ranked in result.ranked_tasks}
+        assert by_id["B"].successor_count == 1  # direct count stays for display
+        assert by_id["B"].downstream_count == 9
 
     def test_consequence_tiebreak(self):
         state, session, analysis, scores = simple_fixture(
